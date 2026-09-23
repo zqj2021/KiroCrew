@@ -65,7 +65,7 @@ from __future__ import annotations
 
 import logging
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -582,20 +582,39 @@ def _ceiling_permitted(allowed_tools: Any, agent_id: str) -> list[str]:
     ``rebuild_agent_config``'s last sanitizer pass over ``mcpServers``, is deliberate.
 
     Each entry is asked under Crew's name for it (``subagent`` as ``use_subagent``).
-    ``may_skip_gate_now`` fails closed: what is dropped here keeps prompting.
+    ``may_skip_gate_now`` fails closed: what is dropped here keeps prompting. An
+    ``@server`` entry covering ``background_run`` is narrowed to the server's other
+    verbs (``agent_sdk.drivers.acp.narrowed_grant``); any other spelling that reaches it never
+    derived an MCP allow, so it is dropped rather than widened into one.
     """
+    # circular import: the driver imports this layer.
+    from kiro_crew.agent_sdk.drivers.acp import narrowed_grant
+
     if not isinstance(allowed_tools, list):
         return []
     permitted: list[str] = []
     withheld: list[str] = []
+    narrowed_away: list[str] = []
     for raw in allowed_tools:
         if not isinstance(raw, str) or not raw.strip():
             continue
         entry = canonical_kiro_cli_tool_name(raw.strip())
-        if may_skip_gate_now(entry):
+        narrowed = narrowed_grant(entry)
+        if narrowed is not None:
+            subs = [s for s in narrowed if entry.startswith("@") and may_skip_gate_now(s)]
+            permitted.extend(s for s in subs if s not in permitted)
+            narrowed_away.append(entry)
+        elif may_skip_gate_now(entry):
             permitted.append(entry)
         else:
             withheld.append(entry)
+    if narrowed_away:
+        _audit_permission_decision(
+            ", ".join(sorted(narrowed_away)),
+            "withheld",
+            "background_run is never auto-approved; narrowed to the server's other verbs",
+            agent_id,
+        )
     if withheld:
         names = ", ".join(sorted(withheld))
         logger.info(
@@ -606,6 +625,18 @@ def _ceiling_permitted(allowed_tools: Any, agent_id: str) -> list[str]:
         )
         _audit_permission_decision(names, "withheld", "governance ceiling", agent_id)
     return permitted
+
+
+def _never_covering_background_run(permits: Callable[[str], bool]) -> Callable[[str], bool]:
+    """*permits*, refusing every ref that could grant ``background_run`` first.
+
+    ``merge_user_permissions`` asks about an authored ``mcp`` allow per server
+    (``@kirocrew-cron``), and a server-level answer covers every verb on it, so an
+    authored allow naming the cron server does not travel at all: it keeps prompting.
+    """
+    from kiro_crew.agent_sdk.drivers.acp import reaches_never_auto_approved
+
+    return lambda ref: not reaches_never_auto_approved(ref) and permits(ref)
 
 
 #: Per outcome, the security-event operation it is recorded under. A withhold keeps
@@ -1155,7 +1186,7 @@ def to_client_custom_agent(
     permissions = merge_user_permissions(
         permissions,
         spec.get("permissions"),
-        ceiling_permits=may_skip_gate_now,
+        ceiling_permits=_never_covering_background_run(may_skip_gate_now),
         audit_decision=lambda refs, outcome, reason: _audit_permission_decision(
             refs, outcome, reason, agent_id
         ),
@@ -1174,7 +1205,9 @@ def to_client_custom_agent(
     permissions = merge_user_permissions(
         permissions,
         translated,
-        ceiling_permits=may_skip_gate_for_session(session_key, governance_app),
+        ceiling_permits=_never_covering_background_run(
+            may_skip_gate_for_session(session_key, governance_app)
+        ),
         audit_decision=lambda refs, outcome, reason: _audit_permission_decision(
             refs, outcome, reason, agent_id
         ),

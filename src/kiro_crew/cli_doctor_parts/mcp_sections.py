@@ -289,8 +289,15 @@ def _doctor_mcp_tools(
             # decision the user owns); doctor simply never mints one. A gated-off
             # server never gets one minted either: granting auto-approve to a
             # server emission has decided against is the wrong direction.
-            allowed.append(ref)
-            config_changed = True
+            # A bare ref covering ``background_run`` is minted narrowed, so the
+            # repair never auto-approves it; a user's own whole-server grant is
+            # left for the next build to narrow.
+            from kiro_crew.agent_sdk.drivers.acp import narrowed_grant
+
+            minted = narrowed_grant(ref)
+            added = [g for g in ([ref] if minted is None else minted) if g not in allowed]
+            allowed.extend(added)
+            config_changed = config_changed or bool(added)
 
         if gate_closed:
             # Nothing should launch: no emitted spec defines this server, so a
