@@ -369,6 +369,9 @@ class _ChatSlot:
         "_embed_question_polled_at",
         "_welcomed_agent",
         "_welcome_preview",
+        # A per-slot record kept outside the slot (the code-channel sender record)
+        # holds it weakly, so a closed slot is freed with everything it carries.
+        "__weakref__",
     )
 
     # Initialised by state_parts/source_links.py.

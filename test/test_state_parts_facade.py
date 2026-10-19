@@ -416,6 +416,7 @@ _BASE_SLOT_MEMBERS: dict[str, tuple[str, bool, bool, str]] = {
 #: A fresh ``_ChatSlot("k")`` before the split: field -> ("value", repr) for a plain
 #: value, or ("type", qualified type name) for an object, a clock or a minted id.
 _BASE_SLOT_DEFAULTS: dict[str, tuple[str, str | None]] = {
+    "__weakref__": ("value", "None"),
     "_acp_client": ("value", "None"),
     "_acp_pipe_death_retries": ("value", "0"),
     "_active_fallback_model": ("value", "''"),
