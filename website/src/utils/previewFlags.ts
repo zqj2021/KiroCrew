@@ -248,6 +248,20 @@ export const PREVIEW_SESSION_HARNESS = `${PREVIEW_FLAG_PREFIX}session-harness`
 export const PREVIEW_DASHBOARD_STALE_WAKE = `${PREVIEW_FLAG_PREFIX}dashboard-stale-wake`
 
 /**
+ * Dashboard edit mode: the Edit switch on a Bot's Dashboard tab. In Edit mode
+ * hovering or focusing a value shows where it came from, a component flips to
+ * show its provider and send the Bot a change request, a value the Bot writes
+ * can be corrected, and Sources lists every field the page reads.
+ *
+ * Read it through `usePreviewFlag(PREVIEW_DASHBOARD_EDIT_MODE)`. It also has a
+ * server half: the gateway reads `dashboard.feature_previews.dashboard_edit_mode`
+ * to compose the frame's edit bridge, keep component ids, and answer the
+ * lineage and correct routes. Default OFF, and OFF is the Dashboard tab and
+ * every page as before.
+ */
+export const PREVIEW_DASHBOARD_EDIT_MODE = `${PREVIEW_FLAG_PREFIX}dashboard-edit-mode`
+
+/**
  * Every live preview-flag key, the ones the gateway keeps. Each one's name (see
  * {@link previewFlagName}) is a writable `dashboard.feature_previews.<name>` path
  * in the gateway config; `test_feature_previews_config.py` pins this list equal
@@ -270,6 +284,7 @@ export const PREVIEW_FLAGS: readonly string[] = [
   PREVIEW_SESSION_HARNESS,
   PREVIEW_DASHBOARD_STALE_WAKE,
   PREVIEW_BRIDGE_APPROVALS,
+  PREVIEW_DASHBOARD_EDIT_MODE,
 ]
 
 /**
