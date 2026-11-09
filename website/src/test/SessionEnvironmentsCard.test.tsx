@@ -27,6 +27,7 @@ interface Section {
   boxd_profiles?: BoxdRow[]
   default_profile?: string
   stop_on_shutdown?: boolean
+  gh_proxy?: boolean
   kiro_cloud_profiles?: { id: string; name: string; repositories: string[] }[]
 }
 let stored: { session_environments?: Section }
@@ -648,6 +649,47 @@ describe('Coder setup and saved profile management', () => {
     fireEvent.click(save())
     await waitFor(() => expect(writes).toHaveLength(1))
     expect((writes[0] as { value: Section }).value).toMatchObject({ stop_on_shutdown: false })
+  })
+
+  it('says whose account the gh proxy would use and what it may do, and saves it on', async () => {
+    stored = { session_environments: { coder_url: 'https://coder.example.test', profiles: [], default_profile: '', stop_on_shutdown: true, gh_proxy: false } as Section }
+    server.use(http.get('*/api/session-environments/gh-login', () => HttpResponse.json({ login: 'octo-owner' })))
+    await mounted()
+    const proxy = () => screen.getByRole('switch', { name: 'Open and update pull requests from remote sessions' })
+    expect(proxy()).not.toBeChecked()
+    // Names the gh proxy and the account it would act as, before it is on.
+    expect(await screen.findByText('Agents working in a remote workspace can open pull requests and post comments on GitHub as your GitHub account @octo-owner. Anyone with access to the repository sees them, marked as written by an agent.')).toBeInTheDocument()
+    // The limits, as a list the switch is described by, in reading order.
+    const notes = screen.getByTestId('gh-proxy-notes')
+    expect(proxy().getAttribute('aria-describedby')?.split(' ')).toContain(notes.id)
+    expect([...notes.querySelectorAll('li')].map(li => li.textContent)).toEqual([
+      'Writes only to repositories the session pushed to, and reads only ones it uses with git',
+      'Marks every PR description and comment it writes as written by an agent',
+      "Can't merge, approve or change settings",
+      'Runs on this computer through gh-proxy, not in the remote workspace',
+      'Off stops it immediately',
+    ])
+    fireEvent.click(proxy())
+    fireEvent.click(save())
+    await waitFor(() => expect(writes).toHaveLength(1))
+    expect((writes[0] as { value: Section }).value).toMatchObject({ gh_proxy: true })
+  })
+
+  it('says the login lookup failed and retries it, keeping the switch usable', async () => {
+    stored = { session_environments: { coder_url: 'https://coder.example.test', profiles: [], default_profile: '', stop_on_shutdown: true, gh_proxy: false } as Section }
+    let calls = 0
+    server.use(http.get('*/api/session-environments/gh-login', () => (++calls === 1 ? HttpResponse.error() : HttpResponse.json({ login: 'octo-owner' }))))
+    await mounted()
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
+    expect(await screen.findByText(/as your GitHub account @octo-owner\. Anyone with access/)).toBeInTheDocument()
+    expect(screen.queryByText(/Sign in with gh auth login on this computer, then Retry\./)).toBeNull()
+  })
+
+  it('says "your GitHub account" when this computer cannot name the login', async () => {
+    stored = { session_environments: { coder_url: 'https://coder.example.test', profiles: [], default_profile: '', stop_on_shutdown: true, gh_proxy: false } as Section }
+    server.use(http.get('*/api/session-environments/gh-login', () => HttpResponse.json({ login: null })))
+    await mounted()
+    expect(await screen.findByText('Agents working in a remote workspace can open pull requests and post comments on GitHub as your GitHub account. Anyone with access to the repository sees them, marked as written by an agent.')).toBeInTheDocument()
   })
 })
 
