@@ -746,7 +746,11 @@ def _url_payload_command(n: int) -> str:
 #: (``/owa/?ItemID=<id>&exvsurl=1&...``) in ``redaction_entropy``, its use by
 #: the exfil gate and its five names in the ``redaction`` facade manifest, so
 #: Graph's own message and event links are not masked or blocked. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_227
+#: Raised by 39, from 35,227, for the deny view's Windows program-suffix view (at the
+#: program word, past ``sudo``-style wrappers and ``cmd /c``), the in-word ``^``/backtick
+#: view and the ``aws.exe`` spelling in the s3 download reader. Views only add matches;
+#: nothing is relaxed. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_266
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
