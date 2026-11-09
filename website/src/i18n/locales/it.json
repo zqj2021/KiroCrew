@@ -23265,6 +23265,14 @@
       "free": "{{free}} liberi su {{total}}",
       "uptime": "Tempo di attività",
       "notCreatedHint": "Il workspace viene creato con il tuo prossimo messaggio.",
+      "skills": "Competenze",
+      "skillsCopied": "Copiate: {{n}}",
+      "skillsOff": "Non copiate (disattivato nelle Impostazioni)",
+      "skillsFailed": "Copia non riuscita; nuovo tentativo al prossimo avvio di questa chat",
+      "skillsHint": "Copia in sola lettura in {{root}}, creata all’avvio di questa chat, così gli script delle competenze vengono eseguiti nel workspace.",
+      "skillsOldPython": "Il python3 di questo workspace è {{python}}, più vecchio del Python {{gateway}} di questo computer.",
+      "skillsIncompatible": "Script delle competenze copiati che non compilano con python3 {{python}}: {{n}}",
+      "skillsLeftOut": "File esclusi (link, nascosti, di credenziali o troppo grandi): {{n}}",
       "stoppedHint": "Il workspace si avvia con il tuo prossimo messaggio. Si ferma da solo dopo un’ora di inattività."
     },
     "remoteGit": {
@@ -23346,6 +23354,8 @@
     "stopOnShutdownHint": "Attivo: {{productName}} arresta i tuoi workspace quando si spegne. Disattivo: restano in esecuzione, così le chat si riconnettono più in fretta dopo un riavvio. L’arresto automatico di Coder resta comunque valido.",
     "stopOnShutdownSprites": "Gli sprite non vengono arrestati quando {{productName}} si spegne: uno sprite va in ibernazione da solo quando è inattivo e conserva i suoi file.",
     "stopOnShutdownBoxd": "boxd: quando è attivo, le macchine create da questa macchina vengono ibernate, quindi conservano i loro file.",
+    "copySkills": "Copia le competenze nel workspace",
+    "copySkillsHint": "Attivo: all’avvio di una chat remota, le competenze che il suo agente può usare (istruzioni, script, riferimenti) vengono copiate in sola lettura nel suo workspace, in ~/.kirocrew-worker/skills, così i loro script vengono eseguiti lì. Link, file nascosti, file di credenziali e file oltre 1 MiB vengono esclusi. Disattivo: non viene copiato nulla e gli script delle competenze non possono essere eseguiti nel workspace.",
     "computeSurvivesStop": "Questo modello conserva i file quando un workspace si arresta",
     "computeSurvivesStopHint": "Attivo: i file vengono conservati quando un workspace si arresta, quindi {{productName}} può arrestare questi workspace. Disattivo: i file vanno persi quando un workspace si arresta, quindi {{productName}} non li arresta mai, nemmeno quando «Arresta i workspace quando {{productName}} si spegne» qui sotto è attivo. L'arresto automatico di Coder resta valido.",
     "apiToken": "Token API di Sprites",

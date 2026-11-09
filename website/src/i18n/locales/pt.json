@@ -23265,6 +23265,14 @@
       "free": "{{free}} livres de {{total}}",
       "uptime": "Tempo ativo",
       "notCreatedHint": "O workspace é criado com sua próxima mensagem.",
+      "skills": "Habilidades",
+      "skillsCopied": "Copiadas: {{n}}",
+      "skillsOff": "Não copiadas (desligado nas Configurações)",
+      "skillsFailed": "A cópia falhou; nova tentativa quando este chat iniciar de novo",
+      "skillsHint": "Cópia somente leitura em {{root}}, feita quando este chat começou, para que os scripts das habilidades rodem no workspace.",
+      "skillsOldPython": "O python3 deste workspace é {{python}}, mais antigo que o Python {{gateway}} deste computador.",
+      "skillsIncompatible": "Scripts de habilidades copiados que não compilam no python3 {{python}}: {{n}}",
+      "skillsLeftOut": "Arquivos deixados de fora (links, ocultos, de credenciais ou grandes demais): {{n}}",
       "stoppedHint": "O workspace inicia com sua próxima mensagem. Ele para sozinho após uma hora ocioso."
     },
     "remoteGit": {
@@ -23346,6 +23354,8 @@
     "stopOnShutdownHint": "Ligado: o {{productName}} para seus workspaces ao ser desligado. Desligado: eles continuam em execução, então os chats reconectam mais rápido após um reinício. A parada automática do próprio Coder continua valendo.",
     "stopOnShutdownSprites": "Os sprites não são parados quando o {{productName}} é desligado: um sprite hiberna sozinho quando ocioso e mantém seus arquivos.",
     "stopOnShutdownBoxd": "boxd: quando isto está ligado, as máquinas criadas por esta máquina são hibernadas, então mantêm seus arquivos.",
+    "copySkills": "Copiar as habilidades para o workspace",
+    "copySkillsHint": "Ligado: quando um chat remoto começa, as habilidades que o agente dele pode usar (instruções, scripts, referências) são copiadas somente para leitura no workspace, em ~/.kirocrew-worker/skills, para que os scripts rodem lá. Links, arquivos ocultos, arquivos de credenciais e arquivos com mais de 1 MiB ficam de fora. Desligado: nada é copiado, e os scripts das habilidades não podem rodar no workspace.",
     "computeSurvivesStop": "Este modelo mantém os arquivos quando um workspace para",
     "computeSurvivesStopHint": "Ativado: os arquivos são mantidos quando um workspace para, então o {{productName}} pode parar estes workspaces. Desativado: os arquivos são perdidos quando um workspace para, então o {{productName}} nunca os para, mesmo quando “Parar os workspaces quando o {{productName}} é desligado” abaixo estiver ativado. A parada automática do Coder continua valendo.",
     "apiToken": "Token da API do Sprites",

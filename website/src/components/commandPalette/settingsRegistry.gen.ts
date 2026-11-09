@@ -3332,6 +3332,16 @@ export const SETTINGS_REGISTRY: SettingEntry[] =
     "configKey": "session_environments.coder_url"
   },
   {
+    "id": "session-environments.copy-skills-to-the-workspace",
+    "label": "Copy skills to the workspace",
+    "labelKey": "sessionEnvironments.copySkills",
+    "description": "On: when a remote chat starts, the skills its agent can use (instructions, scripts, references) are copied read-only into its workspace at ~/.kirocrew-worker/skills, so their scripts run there. Links, hidden files, credential files and files over 1 MiB are left out. Off: nothing is copied, and skill scripts cannot run in the workspace.",
+    "tab": "session-environments",
+    "type": "toggle",
+    "occurrence": 1,
+    "configKey": "session_environments.copy_skills"
+  },
+  {
     "id": "session-environments.default-for-new-chats",
     "label": "Default for new chats",
     "labelKey": "sessionEnvironments.defaultProfile",

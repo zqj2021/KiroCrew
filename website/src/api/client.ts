@@ -1042,6 +1042,18 @@ export interface RemoteEnvironmentHealth {
   workspace?: string
   workdir?: string
   error?: string
+  /** What this session's start copied into the workspace; absent with nothing to copy. */
+  skills?: {
+    state: 'copied' | 'off' | 'failed'
+    root?: string
+    count?: number
+    python?: string
+    /** This computer's Python, set only when the workspace's python3 is older. */
+    gateway_python?: string | null
+    /** Copied `.py` files the workspace's python3 cannot compile. */
+    incompatible?: number
+    skipped_count?: number
+  }
   stats?: {
     arch: string
     cpus: number

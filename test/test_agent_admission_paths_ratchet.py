@@ -71,6 +71,7 @@ ADMISSION_SITES: dict[Site, frozenset[str]] = {
     ("acp/runtime_mode_activation.py", "_activate_mode_bracketed"): frozenset({FRESH}),
     ("acp/runtime_spawn_launch.py", "_resolve_spawn_plan"): frozenset({FRESH}),
     ("acp/session_mcp.py", "_agent_spec_and_snapshot_for"): frozenset({FRESH}),
+    ("agent_sdk/kas_skill_view.py", "kas_session_skill_scope"): frozenset({FRESH}),
 }
 
 # Per admission site: (gates it does not reference, whether something else covers it).
@@ -96,6 +97,11 @@ KNOWN_GAPS: dict[Site, tuple[frozenset[str], str]] = {
         frozenset({FORK}),
         "not a start path: it resolves the spec whose MCP servers a session mounts, "
         "and the spawn that consumes it runs its own admission",
+    ),
+    ("agent_sdk/kas_skill_view.py", "kas_session_skill_scope"): (
+        frozenset({FORK}),
+        "not a start path: it reads which skills a remote session's spec grants, to "
+        "copy them into the workspace; the spawn that runs the spec runs its own admission",
     ),
 }
 

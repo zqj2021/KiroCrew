@@ -11440,6 +11440,14 @@
       "free": "{{free}} free of {{total}}",
       "uptime": "Uptime",
       "notCreatedHint": "The workspace is created with your next message.",
+      "skills": "Skills",
+      "skillsCopied": "Copied: {{n}}",
+      "skillsOff": "Not copied (off in Settings)",
+      "skillsFailed": "Copy failed; retried when this chat next starts",
+      "skillsHint": "Read-only copy at {{root}}, made when this chat started, so skill scripts run in the workspace.",
+      "skillsOldPython": "This workspace’s python3 is {{python}}, older than the Python {{gateway}} on this computer.",
+      "skillsIncompatible": "Copied skill scripts that don’t compile on python3 {{python}}: {{n}}",
+      "skillsLeftOut": "Files left out (links, hidden, credential or oversized files): {{n}}",
       "stoppedHint": "The workspace starts with your next message. It stops on its own after an idle hour."
     },
     "remoteGit": {
@@ -11519,6 +11527,8 @@
     "stopOnShutdownHint": "On: {{productName}} stops your workspaces when it shuts down. Off: they keep running, so chats reconnect faster after a restart. Coder's own auto-stop still applies.",
     "stopOnShutdownSprites": "Sprites are not stopped when {{productName}} shuts down: a sprite hibernates on its own when idle and keeps its files.",
     "stopOnShutdownBoxd": "boxd: when this is on, the machines this computer created are hibernated, so they keep their files.",
+    "copySkills": "Copy skills to the workspace",
+    "copySkillsHint": "On: when a remote chat starts, the skills its agent can use (instructions, scripts, references) are copied read-only into its workspace at ~/.kirocrew-worker/skills, so their scripts run there. Links, hidden files, credential files and files over 1 MiB are left out. Off: nothing is copied, and skill scripts cannot run in the workspace.",
     "computeSurvivesStop": "This template keeps its files when a workspace stops",
     "computeSurvivesStopHint": "On: files are kept when a workspace stops, so {{productName}} may stop these workspaces. Off: files are lost when a workspace stops, so {{productName}} never stops them, even when “Stop workspaces when {{productName}} shuts down” below is on. Coder's own auto-stop still applies.",
     "apiToken": "Sprites API token",
