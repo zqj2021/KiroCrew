@@ -756,7 +756,16 @@ def _url_payload_command(n: int) -> str:
 #: ``deny_gate`` forwards it behind a length-preserving guard. No matcher, rule,
 #: threshold or verdict moved -- the decision is byte-identical and the change is
 #: diagnostics-only. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_311
+#: Raised by 1083, from 35,311, for the self-kill floor's ``git grep`` pager read,
+#: in its own owner module ``argv_floor_pager``: the last ``-O`` and its ``--no-``
+#: form, the last ``core.pager`` / ``pager.grep`` from ``-c``, ``--config-env`` and
+#: ``GIT_CONFIG_*`` words, ``GIT_PAGER`` / ``PAGER`` unless ``-P``, an inline alias
+#: chain, ``find -exec``, here-documents fed to a shell, and the floor's own pass
+#: over array assignments under an expansion budget, with candidate caps that
+#: count only values that could carry a pager; the walk's opt-in shell-name
+#: fold for that read; the walk's shared tokenization; and the
+#: facade's type-checker imports of its names. Re-measured.
+_PACKAGE_LINE_BUDGET = 36_394
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
