@@ -28,6 +28,22 @@ from conftest import make_dir_link
 from kiro_crew.apps.builtins.issue_radar.backend import crew_store as cs
 from kiro_crew.crew_log import emit as crew_log_emit
 from kiro_crew.crew_log import projection as crew_log_projection
+from kiro_crew.crew_log import unit_order_seam
+from kiro_crew.crew_log.projection_catalogue import OWNER_SERVED_SLOT_PROJECTION
+
+
+def _sweep(now: float) -> "tuple[int, int]":
+    """``sweep_expired(0, now=now)`` once the eager folder has folded every wake.
+
+    The folder seals a closed unit's savepoints on its own thread under a lease on the
+    unit, so a sweep that lands while one is written finds the unit owned and keeps it.
+    """
+    from kiro_crew.crew_log import eager
+    from kiro_crew.crew_log import store as crew_log_store
+    from kiro_crew.testing.wait import FALLBACK_TIMEOUT_SECS
+
+    assert eager.drain(timeout=FALLBACK_TIMEOUT_SECS), "the eager folder never settled"
+    return crew_log_store.sweep_expired(0, now=now)
 
 
 def test_reads_apply_units_in_the_order_they_recorded_not_header_order(tmp_path, monkeypatch):
@@ -85,6 +101,275 @@ def test_a_resets_unit_that_has_not_recorded_yet_reads_last(tmp_path, monkeypatc
         second,
         first,
     ), "the live unit still applies last"
+
+
+def test_a_crews_newest_unit_folds_last_where_its_slot_carry_lands(monkeypatch):
+    """The slot carry writes the crew's whole record into the slot's NEWEST unit before
+    that unit records anything, so the unit is absent from the order file. A read folds
+    it last all the same: folded first, the units whose record it already carries would
+    be laid over the carry again and every event would show twice. Once retention takes
+    the unit the crew moved past, the carry is the record and reads the same."""
+    from kiro_crew.crew_log import session_tree_projection as stp
+    from kiro_crew.testing.wait import wait_until
+
+    # The carry's fold inline instead of on the maintenance pool, so a drain covers the
+    # opening, the carry and the close; and a probe whose map holds no key.
+    monkeypatch.setattr(crew_log_emit, "_submit_carry_fold", lambda job: job())
+    crew_log_emit.set_session_key_probe(lambda session_id: None)
+    stp.reset_for_tests()
+    try:
+        crew = _crew(None)
+        cid = crew["id"]
+        slot = cs.slot_key_for(cid)
+        crew_log_emit.on_session_opened("acp-carry-1", agent="kirocrew", slot=slot)
+        assert_drained()
+        _item(None, cid, "acp-carry-1", 7, {"phase": "claimed"}, "claim")
+        _item(None, cid, "acp-carry-1", 7, {"phase": "implementing"}, "implement")
+        assert_drained()
+        before = cs.read_ledger(OWNER, REPO, cid, None)
+        assert len(before["events"]) == 2, "the control: two events recorded"
+        crew_log_emit.on_session_opened(
+            "acp-carry-2",
+            agent="kirocrew",
+            slot=slot,
+            previous_sid="acp-carry-1",
+            session_key=f"dashboard:{slot}",
+        )
+        assert_drained()
+        crew_log_projection.forget_slot_folds()
+
+        assert cs._recorded_unit_order(OWNER, REPO, cid, None) == ("acp-carry-1",)
+        assert cs.crew_log_units(OWNER, REPO, cid, None) == ("acp-carry-1", "acp-carry-2")
+        carried = cs.read_ledger(OWNER, REPO, cid, None)
+        assert carried["events"] == before["events"]
+        assert carried["items"] == before["items"]
+
+        # Any moment after the close: with a retention of 0 days every close before it
+        # has expired. A constant rather than a clock read, so the test is the same
+        # whenever it runs.
+        assert _sweep(4_000_000_000.0) == (1, 0)
+        crew_log_projection.forget_slot_folds()
+        assert cs.crew_log_units(OWNER, REPO, cid, None) == ("acp-carry-2",)
+        collected = cs.read_ledger(OWNER, REPO, cid, None)
+        assert collected["events"] == before["events"]
+        assert collected["items"] == before["items"]
+    finally:
+        crew_log_emit.set_session_key_probe(None)
+        assert_drained()
+        tree = stp.projection()
+        stp.reset_for_tests()
+        wait_until(
+            lambda: not tree._write_scheduled,
+            describe=lambda: "the session tree's debounced checkpoint is still sleeping",
+        )
+
+
+def test_a_later_carry_after_a_backward_clock_step_holds_each_event_once(monkeypatch):
+    """The crew's second carry reads its units in succession, not in header-clock order.
+
+    The clock steps back between the first two units, so the second's header is stamped
+    before the first's. The second carries the first, then a third opens before retention
+    collects either. Read in header order, the third's carry would fold the second, whose
+    carry already holds the first's events, then the first's events again, and keep both
+    copies once the two units are collected."""
+    from kiro_crew.crew_log import session_tree_projection as stp
+    from kiro_crew.crew_log import store as crew_log_store
+    from kiro_crew.testing.wait import wait_until
+
+    stamp = [1_700_000_000_000]
+    # Through the store facade, which writes it into store_handle's binding, the one the
+    # header writer reads.
+    monkeypatch.setattr(crew_log_store, "now_ms", lambda: stamp[0])  # flake-ok: fixed clock pin
+    monkeypatch.setattr(crew_log_emit, "_submit_carry_fold", lambda job: job())
+    crew_log_emit.set_session_key_probe(lambda session_id: None)
+    stp.reset_for_tests()
+    try:
+        crew = _crew(None)
+        cid = crew["id"]
+        slot = cs.slot_key_for(cid)
+        crew_log_emit.on_session_opened("acp-step-1", agent="kirocrew", slot=slot)
+        assert_drained()
+        _item(None, cid, "acp-step-1", 7, {"phase": "claimed"}, "claim")
+        _item(None, cid, "acp-step-1", 7, {"phase": "implementing"}, "implement")
+        assert_drained()
+        before = cs.read_ledger(OWNER, REPO, cid, None)
+        assert len(before["events"]) == 2, "the control: two events recorded"
+        for unit, previous, at in (
+            ("acp-step-2", "acp-step-1", 1_650_000_000_000),
+            ("acp-step-3", "acp-step-2", 1_750_000_000_000),
+        ):
+            stamp[0] = at
+            crew_log_emit.on_session_opened(
+                unit,
+                agent="kirocrew",
+                slot=slot,
+                previous_sid=previous,
+                session_key=f"dashboard:{slot}",
+            )
+            assert_drained()
+        assert crew_log_store.session_units_for_slot(slot) == (
+            "acp-step-2",
+            "acp-step-1",
+            "acp-step-3",
+        ), "the control: the header clock inverts the first two"
+
+        # Any moment after every close: a constant rather than a clock read.
+        assert _sweep(4_000_000_000.0) == (2, 0)
+        crew_log_projection.forget_slot_folds()
+        collected = cs.read_ledger(OWNER, REPO, cid, None)
+        assert collected["events"] == before["events"]
+        assert collected["items"] == before["items"]
+    finally:
+        crew_log_emit.set_session_key_probe(None)
+        assert_drained()
+        tree = stp.projection()
+        stp.reset_for_tests()
+        wait_until(
+            lambda: not tree._write_scheduled,
+            describe=lambda: "the session tree's debounced checkpoint is still sleeping",
+        )
+
+
+def test_a_carried_unit_the_crew_moved_past_folds_after_what_it_carries(monkeypatch):
+    """A unit the crew never recorded into keeps its place after the units its carry holds.
+
+    The second unit carries the crew's record and records nothing; the third opens stating
+    no session key, so it carries nothing and the second's carry is the newest the read
+    meets. The read places the second unit by succession, after the first, so each event
+    reads once. Folded first, before every unit the order file names, it would have the
+    first unit's events laid over its carry.
+    """
+    from kiro_crew.crew_log import session_tree_projection as stp
+    from kiro_crew.testing.wait import wait_until
+
+    monkeypatch.setattr(crew_log_emit, "_submit_carry_fold", lambda job: job())
+    crew_log_emit.set_session_key_probe(lambda session_id: None)
+    stp.reset_for_tests()
+    try:
+        crew = _crew(None)
+        cid = crew["id"]
+        slot = cs.slot_key_for(cid)
+        crew_log_emit.on_session_opened("acp-past-1", agent="kirocrew", slot=slot)
+        assert_drained()
+        _item(None, cid, "acp-past-1", 7, {"phase": "claimed"}, "claim")
+        _item(None, cid, "acp-past-1", 7, {"phase": "implementing"}, "implement")
+        assert_drained()
+        before = cs.read_ledger(OWNER, REPO, cid, None)
+        assert len(before["events"]) == 2, "the control: two events recorded"
+        crew_log_emit.on_session_opened(
+            "acp-past-2",
+            agent="kirocrew",
+            slot=slot,
+            previous_sid="acp-past-1",
+            session_key=f"dashboard:{slot}",
+        )
+        assert_drained()
+        crew_log_emit.on_session_opened(
+            "acp-past-3", agent="kirocrew", slot=slot, previous_sid="acp-past-2"
+        )
+        assert_drained()
+        crew_log_projection.forget_slot_folds()
+
+        assert cs._recorded_unit_order(OWNER, REPO, cid, None) == ("acp-past-1",)
+        assert cs.crew_log_units(OWNER, REPO, cid, None) == (
+            "acp-past-1",
+            "acp-past-2",
+            "acp-past-3",
+        )
+        moved = cs.read_ledger(OWNER, REPO, cid, None)
+        assert moved["events"] == before["events"]
+        assert moved["items"] == before["items"]
+    finally:
+        crew_log_emit.set_session_key_probe(None)
+        assert_drained()
+        tree = stp.projection()
+        stp.reset_for_tests()
+        wait_until(
+            lambda: not tree._write_scheduled,
+            describe=lambda: "the session tree's debounced checkpoint is still sleeping",
+        )
+
+
+def _late_old_unit_write(root, tag):
+    """A crew whose record was written u2 then u1, and the third unit that opens after.
+
+    A request that captured u1 before the reset commits after u2's update, so the crew
+    records u2 then u1 and the reader folds u1 LAST (phase ``claimed``). Answers the crew
+    id and what the reader serves once the third unit has opened and carried.
+    """
+    cid = _crew(root)["id"]
+    slot = cs.slot_key_for(cid)
+    u1, u2, u3 = (f"acp-{tag}-{n}" for n in (1, 2, 3))
+    crew_log_emit.on_session_opened(u1, agent="kirocrew", slot=slot)
+    assert_drained()
+    _item(root, cid, u1, 7, {"phase": "claimed"}, "claim")
+    assert_drained()
+    crew_log_emit.on_session_opened(
+        u2, agent="kirocrew", slot=slot, previous_sid=u1, session_key=f"dashboard:{slot}"
+    )
+    assert_drained()
+    _item(root, cid, u2, 7, {"phase": "implementing"}, "implement")
+    assert_drained()
+    _item(root, cid, u1, 7, {"phase": "claimed"}, "claim", "late")
+    assert_drained()
+    crew_log_projection.forget_slot_folds()
+    assert cs._recorded_unit_order(OWNER, REPO, cid, root) == (u2, u1)
+    before = cs.read_ledger(OWNER, REPO, cid, root)
+    assert before["items"][0]["phase"] == "claimed", "the control: the reader folds u1 last"
+    crew_log_emit.on_session_opened(
+        u3, agent="kirocrew", slot=slot, previous_sid=u2, session_key=f"dashboard:{slot}"
+    )
+    assert_drained()
+    crew_log_projection.forget_slot_folds()
+    return cid, before
+
+
+def _late_old_unit_scenario(tmp_path, monkeypatch, root, tag, swept, kept):
+    """Run :func:`_late_old_unit_write` under *root*; the sweep takes *swept* units and
+    leaves *kept*, and the reader serves the same record before and after it."""
+    from kiro_crew.crew_log import session_tree_projection as stp
+    from kiro_crew.testing.wait import wait_until
+
+    monkeypatch.setattr(crew_log_emit, "_submit_carry_fold", lambda job: job())
+    # What the app's ``register_routes`` fills when the gateway loads it.
+    monkeypatch.setitem(unit_order_seam._PROVIDERS, OWNER_SERVED_SLOT_PROJECTION, cs.carry_units)
+    crew_log_emit.set_session_key_probe(lambda session_id: None)
+    stp.reset_for_tests()
+    try:
+        cid, before = _late_old_unit_write(root, tag)
+        # Any moment after every close: a constant rather than a clock read.
+        assert _sweep(4_000_000_000.0) == (swept, 0)
+        crew_log_projection.forget_slot_folds()
+        assert cs.crew_log_units(OWNER, REPO, cid, root) == tuple(f"acp-{tag}-{n}" for n in kept)
+        after = cs.read_ledger(OWNER, REPO, cid, root)
+        assert after["items"] == before["items"]
+        assert after["events"] == before["events"]
+    finally:
+        crew_log_emit.set_session_key_probe(None)
+        assert_drained()
+        tree = stp.projection()
+        stp.reset_for_tests()
+        wait_until(
+            lambda: not tree._write_scheduled,
+            describe=lambda: "the session tree's debounced checkpoint is still sleeping",
+        )
+
+
+def test_a_carry_folds_a_late_old_unit_write_in_the_recorded_order(tmp_path, monkeypatch):
+    """The third unit's carry folds the units in the order the crew RECORDED them (u2,
+    u1), as the reader does. Folded in succession (u1, u2) it would replace the reader's
+    state with a different one (``implementing``), and the sweep would then delete the two
+    units that could recover it."""
+    # u1 stays: it gained the late entry after its close, which keeps it open (see
+    # ``emit_session._close_superseded``); u2 is collected and u3's carry holds the record.
+    _late_old_unit_scenario(tmp_path, monkeypatch, None, "late", swept=1, kept=(1, 3))
+
+
+def test_a_carry_whose_recorded_order_cannot_be_found_carries_nothing(tmp_path, monkeypatch):
+    """A crew record outside the app's data root names no repository to the carry, so it
+    cannot read the order the reader will use. It carries nothing rather than fold in
+    succession, and the sweep keeps every unit the record is still made of."""
+    _late_old_unit_scenario(tmp_path, monkeypatch, tmp_path, "nf", swept=0, kept=(2, 1, 3))
 
 
 def test_the_app_root_strips_only_the_provider_subtree_it_appended(tmp_path):

@@ -143,6 +143,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _projection,
         _undrained,
         _unit_last_seq,
+        carry_units,
         crew_log_units,
     )
     from kiro_crew.apps.builtins.issue_radar.backend.crew_store_records import (  # noqa: F401
@@ -173,6 +174,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _coerce_crew,
         _crew_id_in_use,
         _crew_lock_path,
+        _crew_record_paths,
         _crews_path,
         _finite_int,
         _hold_releases,
@@ -187,6 +189,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _validated_ttl_hours,
         coerce_skip_scope,
         create_crew,
+        crew_id_of_slot,
         crew_path,
         crews_dir,
         events_path,

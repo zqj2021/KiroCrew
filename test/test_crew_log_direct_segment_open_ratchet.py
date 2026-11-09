@@ -84,6 +84,10 @@ SEGMENT_OPENERS: "dict[str, dict[str, str]]" = {
         "_scan_whole_for_types": "UNCOUNTED whole unit; the session-tree watermark PR "
         "moves it to iter_from past the watermark",
     },
+    "crew_log/retention_joins.py": {
+        "_holds": "UNCOUNTED whole unit; the retention sweep's needle-filtered scan "
+        "for a ledger record or a ledger carry, which can sit anywhere in the log",
+    },
     "crew_log/holders.py": {
         "_read_from": "resumes from a cached offset; no product caller builds its scanner",
     },
