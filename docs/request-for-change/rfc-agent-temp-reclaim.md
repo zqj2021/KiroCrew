@@ -192,7 +192,15 @@ there.
    another namespace's `mountinfo` whose root is the temp root or a directory
    above it (`-v /tmp:/tmp`, a snap's view of the host) keeps every tree in
    that temp root while it runs. That fails closed: snap apps and such
-   containers delay reclaim until they exit. A working directory
+   containers delay reclaim until they exit. When that namespace's `/` is the
+   same mount as here (same point, device and root), as a systemd service's
+   own namespace has, a mount it shares with this one does not count, because
+   it sees the entries under the same names; a container with a root of its
+   own still counts, even for a `/tmp` mount identical to this one. A second
+   mount of the temp root or of a directory above it in this namespace (a bind
+   of `/tmp` on `/var/tmp`, a CIS hardening step) gives each tree a second
+   name, checked like its own: a process working in `/var/tmp/site` keeps
+   `/tmp/site`. A working directory
    that is the temp root itself is use of every entry in it, because the
    process looks them up by name (`python3 -m http.server` run from `/tmp`);
    in another mount namespace that is a working directory or open directory
@@ -209,8 +217,11 @@ there.
    `/tmp/venv/bin/python` resolves out of the venv it runs from. A relative
    argument is joined to the working directory the process has now: nearly
    every process has one, such as a flag, so keeping every tree for it would
-   keep every tree on every host. A tree that holds a socket file is always
-   kept as unprovable. The kernel keeps the name a socket was bound by, which can be relative or can
+   keep every tree on every host. So a script started by a relative name
+   without a shell, such as `python main.py` in `/tmp/job`, that then leaves
+   that directory does not keep its tree, though it still imports from it; a
+   shell would have set `PWD`, which keeps it. A tree that holds a socket
+   file is always kept as unprovable. The kernel keeps the name a socket was bound by, which can be relative or can
    have moved, so `/proc/net/unix` cannot tie a live socket to its file. On
    the host where Phase 1 was built, 1 of 1,135 top-level temp entries held
    a socket file. A hit
@@ -228,7 +239,12 @@ there.
    namespace hides, and that one stays unprovable. So does one not dumpable
    because it holds a capability, a non-zero `CapPrm` in its world-readable
    `status`, such as a `setcap` server or `gnome-keyring-daemon`: it can be an
-   ordinary program working in a tree, so it keeps every path.
+   ordinary program working in a tree, so it keeps every path. A path a
+   skipped not-dumpable process has open or works in can still be removed.
+   For these processes the skip replaces the rule that an unreadable process
+   of the user keeps every tree, because that rule kept every path while
+   `sshd-session`, `ssh-agent` or `(sd-pam)` runs, which is always on a host
+   a person is logged in to.
 7. **Remove.** `pinned_fs.remove_tree_pinned` with an `approve` callback that
    re-checks, through the pinned descriptor, that `(st_dev, st_ino)` and
    `st_uid` match what the checks saw. It then reads the change times again, and
@@ -411,3 +427,9 @@ binding. The Phase 2 pod checks above are the end-to-end proof.
    it is an approval-rule change, and it would make agents ask before every
    cleanup. This RFC proposes no card and leaves the choice to the security
    owners.
+6. **Do step 6's two limits hold for an agent caller?** A path a
+   not-dumpable process of the user has open or works in can be removed, and
+   so can the tree of a script started by a relative name without a shell
+   that then left it. Phase 2 must decide both again before any agent
+   surface, the `tmp_reclaim` tool, reaches this routine, because an agent,
+   not a person, would then name the paths.

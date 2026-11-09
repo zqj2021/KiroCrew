@@ -50,7 +50,13 @@ proves it may go, and every doubt keeps it:
    is a use. A mount in another namespace's table whose root is the temp root
    or above it (``-v /tmp:/tmp``, a snap's view of the host) keeps every tree
    in that temp root while it runs: that namespace can reach each entry under
-   spellings of its own, which are never translated.
+   spellings of its own, which are never translated. When that namespace's
+   ``/`` is the same mount as here (point, device and root), as a systemd
+   service's own namespace has, a mount it shares with this one does not count:
+   it shows the entries under the same names. A container with a root of its
+   own counts even for a ``/tmp`` mount identical to this one. A second mount
+   of the temp root, or of a directory above it, in this namespace (a bind of
+   ``/tmp`` on ``/var/tmp``) gives each tree a second name, checked like its own.
 6. The removal is pinned to the inode the checks saw
    (:func:`pinned_fs.remove_tree_pinned`, or a verified unlink for a file).
    Right before it the change times are read again through the pinned descriptor and
@@ -164,7 +170,8 @@ class ProcessView:
     #: uid or namespace: one whose root is the tree, or inside it, is a use.
     binds: tuple[tuple[int, str, str, str], ...] = ()
     #: The subset of :attr:`binds` read from a mount table other than this
-    #: process's own, so from another mount namespace (see :func:`_use_of`).
+    #: process's own, so from another mount namespace, less each mount it shares
+    #: with this one when its ``/`` is the same mount as here (see :func:`_use_of`).
     foreign_binds: tuple[tuple[int, str, str, str], ...] = ()
     #: ``(pid, comm, directory)`` for each working directory (see :data:`CWD_REF`).
     cwds: tuple[tuple[int, str, str], ...] = ()
@@ -546,15 +553,22 @@ def read_processes(proc_root: Path = Path("/proc"), uid: int | None = None) -> P
         own: bytes | None = _MOUNTINFO.read_bytes()
     except OSError:
         own = None  # no own table to tell a foreign one by: every table counts as foreign
+    here = _mount_table(own) if own is not None else []
     for table, pid in tables.items():
         try:
             owner = os.fsdecode((proc_root / str(pid) / "comm").read_bytes()).removesuffix("\n")
         except OSError:
             owner = "?"
-        mounts = [(pid, owner, dev, root) for _at, dev, root in _mount_table(table)]
-        binds.extend(mounts)
+        entries = _mount_table(table)
+        binds.extend((pid, owner, dev, root) for _at, dev, root in entries)
         if table != own:
-            foreign_binds.extend(mounts)
+            # A namespace that resolves "/" through the same mount as here (a systemd
+            # service's) sees each mount it shares with this one under the same names.
+            # A container with a root of its own does not, even for an identical -v /tmp:/tmp.
+            same = set(here) if _root_mount(entries) == _root_mount(here) else set()
+            foreign_binds.extend(
+                (pid, owner, dev, root) for at, dev, root in entries if (at, dev, root) not in same
+            )
     return ProcessView(
         uses=tuple(uses),
         unreadable=len(unreadable),
@@ -650,6 +664,11 @@ def _mount_table(raw: bytes) -> list[tuple[str, str, str]]:
     return table
 
 
+def _root_mount(table: list[tuple[str, str, str]]) -> tuple[str, str, str] | None:
+    """The mount in effect at ``/`` in *table* (the last one listed there), or ``None``."""
+    return next((entry for entry in reversed(table) if entry[0] == "/"), None)
+
+
 def _mount_points() -> list[str] | None:
     """Every mount point in :data:`_MOUNTINFO`, or ``None`` when unreadable."""
     try:
@@ -716,6 +735,51 @@ def _user(path: Path, uid: int) -> bool:
         return False
 
 
+def _named_use(tree: str, view: ProcessView) -> str:
+    """The first process whose paths, lookup roots, mentions or working directory name *tree*."""
+    for pid, comm, path in view.uses:
+        if _inside(path, tree):
+            return f"in-use: pid {pid} ({comm})"
+    for pid, comm, root in view.roots:
+        if _inside(tree, root) or _inside(root, tree):
+            return f"in-use: pid {pid} ({comm})"
+    for pid, comm, text in view.mentions:
+        # Also with repeated "/" and "/./" squashed: --directory=/tmp/./site.
+        if tree in text or tree in _SQUASH.sub("/", text):
+            return f"in-use: pid {pid} ({comm})"
+    # shortcut: only the temp root itself counts as a working directory above the
+    # tree, never ``/`` or ``/var``; widen this if a real use from there turns up.
+    parent = os.path.dirname(tree)
+    for pid, comm, cwd in view.cwds:
+        if cwd == parent:
+            return f"in-use: pid {pid} ({comm}) works in {parent}"
+    return ""
+
+
+def _second_names(tree: str) -> list[str] | None:
+    """The other paths this namespace reaches *tree* by, or ``None`` when unreadable.
+
+    A bind of ``/tmp`` on ``/var/tmp`` (a CIS hardening step) shows ``/tmp/site``
+    as ``/var/tmp/site`` too, and a process working there prints that name. Each
+    mount of the tree's filesystem whose root holds the tree gives one name; the
+    one that is the tree's own path is left out.
+    """
+    located = _where(tree)
+    try:
+        table = _mount_table(_MOUNTINFO.read_bytes())
+    except OSError:
+        return None
+    if located is None:
+        return None
+    device, inner = located
+    names = (
+        point.rstrip("/") + inner[len(root.rstrip("/")) :] or "/"
+        for point, dev, root in table
+        if dev == device and _inside(inner, root)
+    )
+    return [name for name in names if name != tree]
+
+
 def _use_of(tree: str, view: ProcessView, inodes: frozenset[tuple[int, int]]) -> str:
     """The first process using *tree*, as a reason, or ``""``.
 
@@ -733,24 +797,18 @@ def _use_of(tree: str, view: ProcessView, inodes: frozenset[tuple[int, int]]) ->
     temp root (``-v /tmp:/work`` with its working directory ``/work``), is a
     use too: the process looks things up below it. So is any mount in another
     namespace's table (``view.foreign_binds``) whose root is the temp root or
-    above it.
+    above it, unless that namespace resolves ``/`` through the same mount as
+    here and the mount is one it shares with this namespace. Every name this
+    namespace reaches *tree* by (:func:`_second_names`) is checked like *tree*.
     """
-    for pid, comm, path in view.uses:
-        if _inside(path, tree):
-            return f"in-use: pid {pid} ({comm})"
-    for pid, comm, root in view.roots:
-        if _inside(tree, root) or _inside(root, tree):
-            return f"in-use: pid {pid} ({comm})"
-    for pid, comm, text in view.mentions:
-        # Also with repeated "/" and "/./" squashed: --directory=/tmp/./site.
-        if tree in text or tree in _SQUASH.sub("/", text):
-            return f"in-use: pid {pid} ({comm})"
-    # shortcut: only the temp root itself counts as a working directory above the
-    # tree, never ``/`` or ``/var``; widen this if a real use from there turns up.
+    names = _second_names(tree)
+    if names is None:
+        return "unprovable: the mount table could not be read"
+    for name in (tree, *names):
+        reason = _named_use(name, view)
+        if reason:
+            return reason
     parent = os.path.dirname(tree)
-    for pid, comm, cwd in view.cwds:
-        if cwd == parent:
-            return f"in-use: pid {pid} ({comm}) works in {parent}"
     top: tuple[int, int] | None = None
     if view.holds:
         try:
@@ -770,7 +828,8 @@ def _use_of(tree: str, view: ProcessView, inodes: frozenset[tuple[int, int]]) ->
     # Fail closed: a namespace that mounts the temp root, or a directory above it
     # (-v /tmp:/tmp, a snap's host filesystem), can reach every entry under any
     # path, link or argument spelling, so none of them is provably unused while
-    # it runs. Its own spellings are never translated.
+    # it runs. Its own spellings are never translated. A mount it shares with this
+    # namespace, seen through the same "/", is not in foreign_binds (read_processes).
     above = _where(parent) if view.foreign_binds else None
     for pid, comm, device, root in view.foreign_binds:
         if above is None:
@@ -1091,10 +1150,11 @@ def run_command(paths: Sequence[str], *, dry_run: bool) -> None:
     if view.not_inspected:
         names = ", ".join(view.not_inspected[:5])
         more = ", ..." if len(view.not_inspected) > 5 else ""
+        fate = "may be removed" if dry_run else "may have been removed"
         _say(
             f"\nNot inspected: {names}{more}. The kernel marks these processes of yours as "
-            "not dumpable, so their open files cannot be read; only their command "
-            "lines are counted.",
+            "not dumpable, so their open files and working directories cannot be read; "
+            f"a path one of them still uses {fate}.",
             sys.stderr,
         )
     if view.unreadable:

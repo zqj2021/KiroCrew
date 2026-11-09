@@ -45,7 +45,7 @@ def register_tmp_parser(sub: _Commands) -> None:
         "reclaim",
         description=(
             "Remove each named top-level entry of /tmp or /var/tmp once it is provably idle and "
-            "unused: owned by you, unwritten for 30 minutes, holding no git repository, "
+            "unused: owned by you, unchanged for 30 minutes, holding no git repository, "
             "and named by no running process. Anything in doubt is kept and the reason "
             "is printed. Exit 0 when every path was removed, 1 when any was kept."
         ),

@@ -733,6 +733,7 @@ def test_the_command_names_skipped_and_unreadable_processes(monkeypatch, capsys)
         tr.run_command([], dry_run=True)
     err = capsys.readouterr().err
     assert "Not inspected: ssh-agent 42." in err
+    assert "a path one of them still uses may be removed" in err
     assert "2 of your processes refused access" in err
 
 
@@ -810,6 +811,68 @@ def test_a_namespace_that_can_see_the_temp_root_keeps_every_tree(tmp_path, seen)
             f"in-use: pid {_FAKE_PIDS[0]} (worker) can see {tmp_path} from another mount namespace"
         )
         assert tree.is_dir()
+
+
+@pytest.mark.parametrize("root_mount", ["the same as here", "its own"])
+def test_a_mount_shared_with_this_namespace_counts_only_under_another_root(
+    tmp_path, monkeypatch, root_mount
+):
+    # A systemd service's namespace shares this one's "/" and its mount of the temp
+    # root, so it sees the same names. A container with a root of its own and a
+    # -v /tmp:/tmp line identical to this one's (a tmpfs /tmp) does not.
+    tree = _home(tmp_path, "site")
+    rootfs = "1 0 259:1 / / rw - ext4 /dev/x rw"
+    temp = f"2 1 0:33 / {str(tmp_path).replace(' ', chr(92) + '040')} rw - tmpfs tmpfs rw"
+    own = tmp_path / "mountinfo"
+    own.write_text(f"{rootfs}\n{temp}\n")
+    monkeypatch.setattr(tr, "_MOUNTINFO", own)
+    top = rootfs if root_mount == "the same as here" else "700 600 0:50 / / rw - overlay o rw"
+    table = f"{top}\n{temp}\n701 600 0:51 / /run/private rw - tmpfs tmpfs rw\n".encode()
+    view = _one_process(tmp_path, b"", namespace="mnt:[1]", mountinfo=table)
+    outcome = _run(tree, tmp_path, view)
+    if root_mount == "the same as here":
+        assert outcome.outcome == tr.REMOVED
+    else:
+        assert outcome.reason == (
+            f"in-use: pid {_FAKE_PIDS[0]} (worker) can see {tmp_path} from another mount namespace"
+        )
+        assert tree.is_dir()
+
+
+@pytest.mark.parametrize(
+    "layout, cwd, kept",
+    [
+        ("tmpfs bound on /var/alias", "/var/alias/site", True),
+        ("tmpfs bound on /var/alias", "/var/alias/other", False),
+        ("root-fs dir bound on /var/alias", "/var/alias/site", True),
+        ("bound from root-fs /var/alias", "/var/alias/site", True),
+        ("no second mount", "/var/alias/site", False),
+    ],
+)
+def test_a_second_mount_of_the_temp_root_here_is_a_second_name(
+    tmp_path, monkeypatch, layout, cwd, kept
+):
+    # A CIS bind of /tmp on /var/tmp, either way round: a process working in
+    # /var/tmp/site prints that name for /tmp/site.
+    tree = _home(tmp_path, "site")
+    here = str(tmp_path).replace(" ", chr(92) + "040")
+    lines = ["1 0 259:1 / / rw - ext4 /dev/x rw"]
+    if layout == "tmpfs bound on /var/alias":
+        lines += [f"2 1 0:33 / {here} rw - tmpfs t rw", "3 1 0:33 / /var/alias rw - tmpfs t rw"]
+    elif layout == "root-fs dir bound on /var/alias":
+        lines.append(f"3 1 259:1 {here} /var/alias rw - ext4 /dev/x rw")
+    elif layout == "bound from root-fs /var/alias":
+        lines.append(f"2 1 259:1 /var/alias {here} rw - ext4 /dev/x rw")
+    own = tmp_path / "mountinfo"
+    own.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(tr, "_MOUNTINFO", own)
+    view = _one_process(tmp_path, b"", cwd=cwd)
+    outcome = _run(tree, tmp_path, view)
+    if kept:
+        assert outcome.reason == f"in-use: pid {_FAKE_PIDS[0]} (worker)"
+        assert tree.is_dir()
+    else:
+        assert outcome.outcome == tr.REMOVED
 
 
 def test_a_lookup_directory_is_matched_as_written_and_resolved(tmp_path):
