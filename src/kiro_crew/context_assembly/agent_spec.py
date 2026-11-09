@@ -30,7 +30,7 @@ import hashlib
 import logging
 import os
 import threading
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -109,10 +109,18 @@ def _steering_glob_anchor(pattern: str, project: Path | None) -> tuple[Path, str
     return Path(*parts[:split]), str(Path(*parts[split:]))
 
 
-def _load_steering_resources(project: str | None = None) -> str:
-    """The steering text :func:`steering_resource_documents` keeps, joined."""
+def _load_steering_resources(
+    project: str | None = None, excluded: Collection[str] = frozenset()
+) -> str:
+    """The steering text :func:`steering_resource_documents` keeps, joined.
+
+    *excluded* holds the resolved paths this chat switched off
+    (:mod:`kiro_crew.steering_off`); those documents are left out.
+    """
     parts = [
-        body for _path, _resolved, body in steering_resource_documents(project) if body is not None
+        body
+        for _path, resolved, body in steering_resource_documents(project)
+        if body is not None and str(resolved) not in excluded
     ]
     if parts:
         logger.debug(

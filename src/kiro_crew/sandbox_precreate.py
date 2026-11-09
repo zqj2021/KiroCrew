@@ -371,6 +371,16 @@ _CREW_PRECREATE_READONLY_FILE_LEAVES: tuple[str, ...] = (
     # residual below), so in-sandbox readers see the saved rules, never a pinned ``{}``.
     "denied_commands.json",
     "decisions_consent.json",
+    # The per-chat steering switch-offs: ``steering_off._read_all`` reads an absent
+    # and an empty store alike as nothing switched off (an unreadable one fails
+    # closed instead), so a pre-created ``{}`` means exactly what an absent file
+    # means (criterion 1); the writer
+    # appends to the existing record on its inode (``steering_off._append_record``),
+    # so the read-only mount stays on the same inode, and no in-sandbox code reads the
+    # record anyway -- the gateway reads it outside the sandbox (criterion 2).
+    # Without this entry the Linux mount seal skips the absent leaf, the default
+    # before any switch-off, leaving it creatable from inside.
+    "chat_steering_off.json",
     # The Shared Crew preview switch: ``preview.read_stored`` reads an absent,
     # empty and unreadable store alike as OFF, so a pre-created ``{}`` means
     # exactly what an absent file means (criterion 1); the writer rewrites an

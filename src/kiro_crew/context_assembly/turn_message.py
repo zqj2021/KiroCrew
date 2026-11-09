@@ -101,6 +101,7 @@ def build_message(
     execution_context: Any = None,
     context_provider: "ContextPromptProvider | None" = None,
     steering_dirs: tuple[str, ...] = (),
+    steering_off: frozenset[str] | None = None,
     skill_bodies_session: str | None = None,
     skill_trigger_text: str | None = None,
     template_dir: str | None = None,
@@ -199,12 +200,33 @@ def build_message(
         user_text_range = (user_text_range[0] + len(_notices), user_text_range[1] + len(_notices))
     delivery = None
     blocks_reads = blocks_reads or self._session_memory_modes.get(session_key or "") == "temporary"
+    # The steering files this chat switched off, read here so every caller of this
+    # builder (dashboard, channel and messaging turns alike) honours them.
+    if steering_off is None:
+        from kiro_crew.steering_off import steering_off_for
+
+        steering_off = steering_off_for(session_key)
     native_documents: dict[str, str] = {}
     native_launch_sources: Collection[str] = ()
     # None = no session evidence; build_session_context then falls back to
     # the configured member backend's capability.
     member_dispatch_mounted: bool | None = None
     context_provider = context_provider_of(context_provider)
+    # A harness that loads steering itself (KAS, kiro-cli) may load the same file, so
+    # a switch-off acts only where Crew is the only sender, as the per-chat list
+    # says (``steering_plan.harness_loads_steering``). The record stays, and applies
+    # again if the chat moves back to such a harness.
+    if steering_off:
+        from kiro_crew.steering_plan import harness_loads_steering
+
+        live = context_provider
+        if harness_loads_steering(
+            provider_type=str(
+                (live.context_provider_type if live is not None else None) or provider_type or ""
+            ),
+            native_steering=bool(live is not None and live.native_steering),
+        ):
+            steering_off = frozenset()
     if context_provider is not None:
         member_dispatch_mounted = context_provider.member_dispatch_mounted
         candidate_delivery = context_provider.essential_delivery
@@ -405,6 +427,7 @@ def build_message(
                 member=desk_member,
                 execution_context=execution_context,
                 steering_dirs=steering_dirs,
+                steering_off=steering_off,
                 _v2_essentials=_essentials,
                 member_dispatch_mounted=member_dispatch_mounted,
                 served_model=served_model,
@@ -520,6 +543,7 @@ def build_message(
                 _caps_fs.steering,
                 skip_delivered_roots=_skip_folder_roots,
                 delivered_sources=_declared_sources,
+                steering_off=steering_off,
             )
             if _folder_ctx:
                 parts.append(_folder_ctx + "\n\n")
@@ -598,6 +622,7 @@ def build_message(
                 model_window=model_window,
                 runtime_source=runtime_source,
                 steering_dirs=steering_dirs,
+                steering_off=steering_off,
                 essentials=_essentials,
                 provider_type=provider_type,
                 context_provider=context_provider,

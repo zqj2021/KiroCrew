@@ -72,6 +72,8 @@ def test_steering_is_still_the_backend_gated_half(doc_text: str) -> None:
         '        return ""\n'
         "    if not _group_included(context_groups, CONTEXT_GROUP_PROJECT):\n"
         '        return ""\n'
+        "    if steering_off:\n"
+        "        return ctx._load_steering_resources(project, excluded=steering_off)\n"
         "    return ctx._load_steering_resources(project)\n"
     )
     assert gate in source, (

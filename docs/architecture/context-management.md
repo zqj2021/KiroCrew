@@ -101,6 +101,26 @@ chat, whose essentials envelope decides them. `GET /api/chat/slots/{slot}/steeri
 `_load_steering_resources` sends. Design:
 `docs/request-for-change/rfc-chat-steering-context.md`.
 
+**A chat can switch one of those files off, where Crew writes its text.**
+`src/kiro_crew/steering_off.py` stores, per session key, the resolved paths a chat
+switched off (`chat_steering_off.json` under the data home, paths only, sealed
+read-only for the agent like the other keystone leaves; see
+[security](../system-specs/modules/security.md)). `build_message` reads that set
+itself (`steering_off_for(session_key)`) when its caller passes none, so every
+channel's turn honours it, and passes it as `steering_off` beside `steering_dirs`
+through `build_session_context` and
+`post_compaction_parts` to the two writers Crew owns: `_load_steering_resources`
+(the Claude Code `[Steering resources]`, at session start and after compaction)
+and `_render_folder_steering_section` (folder steering, both paths), which leave
+those documents out. An empty set takes exactly the old calls, so the turn text is
+unchanged. `PUT /api/chat/slots/{slot}/steering` switches a row whose `switch` is
+`on` or `off`. On a harness that loads steering itself (KAS, kiro-cli) every row
+reads `unavailable`, because that harness may load a file Crew also writes and the
+switch only removes Crew's copy; `build_message` ignores a stored switch-off there
+too, so a record kept from another harness never hides a file the list shows (`steering_plan.harness_loads_steering`; #34598
+tracks offering it for files neither loads). A member
+chat's envelope is not filtered: its rows stay `briefing`.
+
 Then the per-turn blocks of §2 follow, and the user's own text is last. This
 build happens *after* the user's message arrives, so it lands directly on
 time-to-first-token: `build_session_context` stamps `_mark(...)` per group

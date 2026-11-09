@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from kiro_crew.context_assembly import budget as _budgets
 
@@ -89,8 +89,12 @@ def _render_folder_steering_section(
     *,
     skip_delivered_roots: bool = True,
     delivered_sources: Collection[str] = (),
+    steering_off: Collection[str] = frozenset(),
 ) -> str:
     """The folder-steering prompt section, capped like the steering section.
+
+    *steering_off* holds the resolved paths this chat switched off
+    (:mod:`kiro_crew.steering_off`); the section leaves those documents out.
 
     One helper for the fresh-session path and the post-compaction reinjection
     path so the two cannot drift in what they skip as already delivered or how
@@ -124,16 +128,36 @@ def _render_folder_steering_section(
     """
     from kiro_crew import context as ctx  # circular import: the facade imports this owner
 
-    return ctx.render_folder_steering(
-        ctx.collect_folder_steering(
-            steering_dirs,
-            project=project,
-            skip_delivered_roots=skip_delivered_roots,
-            delivered_sources=delivered_sources,
-        ),
-        max_chars=cap,
-        scrub=ctx._neutralize_structural_markers,
+    collection = ctx.collect_folder_steering(
+        steering_dirs,
+        project=project,
+        skip_delivered_roots=skip_delivered_roots,
+        delivered_sources=delivered_sources,
     )
+    if steering_off:
+        collection = without_steering_off(collection, steering_off)
+    return ctx.render_folder_steering(
+        collection, max_chars=cap, scrub=ctx._neutralize_structural_markers
+    )
+
+
+def without_steering_off(collection: Any, steering_off: Collection[str]) -> Any:
+    """*collection* minus the documents whose resolved path a chat switched off.
+
+    The collection's omission counts stay as collected: they count ceilings that
+    fired while reading, which a switch-off does not change.
+    """
+    import dataclasses
+
+    kept = []
+    for path, body in collection.documents:
+        try:
+            resolved = str(Path(path).resolve())
+        except (OSError, RuntimeError):
+            resolved = path
+        if resolved not in steering_off:
+            kept.append((path, body))
+    return dataclasses.replace(collection, documents=kept)
 
 
 def _folder_steering_delivery_snapshot(
@@ -195,6 +219,7 @@ def steering_resources_part(
     essentials: str,
     context_groups: frozenset[str] | None,
     project: str | None = None,
+    steering_off: Collection[str] = frozenset(),
 ) -> str:
     """The agent config's ``file://`` steering text for this session, or ``""``.
 
@@ -211,7 +236,9 @@ def steering_resources_part(
     context group decides whether steering is in scope at all. *project* is the
     session's project: relative entries anchor there, as kiro-cli anchors them
     at its working directory, and it adds the project's steering and
-    ``AGENTS.md`` that kiro-cli inherits.
+    ``AGENTS.md`` that kiro-cli inherits. *steering_off* holds the resolved paths
+    this chat switched off; it is passed on only when there are any, so a chat
+    with none takes exactly the old call.
     """
     from kiro_crew import context as ctx  # circular import: the facade imports this owner
     from kiro_crew.agent_files import is_kirocrew_default_agent
@@ -222,4 +249,6 @@ def steering_resources_part(
         return ""
     if not _group_included(context_groups, CONTEXT_GROUP_PROJECT):
         return ""
+    if steering_off:
+        return ctx._load_steering_resources(project, excluded=steering_off)
     return ctx._load_steering_resources(project)

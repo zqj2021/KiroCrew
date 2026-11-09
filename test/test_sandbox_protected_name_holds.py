@@ -480,7 +480,14 @@ class TestLeafOnlyPopulationIsRecorded:
     #: and no-follow like ``kas-mcp-launch`` so an agent cannot choose what a later
     #: bridge connects as. Each snapshot is written by a rename INSIDE it, so its own
     #: inode stays the same; at the data-home root, so leaf-only is the only hold.
-    EXPECTED: dict[str, int] = {"standard": 327, "cc": 334, "strict": 335}
+    #:
+    #: One more root-level leaf, three entries per tier (one per data-home path):
+    #:
+    #: * ``chat_steering_off.json`` -- the steering files each chat switched off,
+    #:   sealed read-only so an agent cannot switch off a rule for its own chat. A
+    #:   file at the data-home root beside writable siblings, rewritten in place,
+    #:   so leaf-only is the only hold, as for ``shared_crew_preview.json``.
+    EXPECTED: dict[str, int] = {"standard": 330, "cc": 337, "strict": 338}
 
     @pytest.mark.parametrize("tier", TIERS)
     def test_leaf_only_count_has_not_grown(self, tier: str) -> None:
