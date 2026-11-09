@@ -756,7 +756,12 @@ def _url_payload_command(n: int) -> str:
 #: ``deny_gate`` forwards it behind a length-preserving guard. No matcher, rule,
 #: threshold or verdict moved -- the decision is byte-identical and the change is
 #: diagnostics-only. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_311
+#: Raised by 1,699, from 35,311, for the ``sandbox-escape-git-tar-self`` floor: a new
+#: ``argv_floor_git_tar`` module (the git/tar self-target predicate) with its catalog
+#: row, note, facade manifest, package exports and gate re-entry, the value-scoped
+#: exec/override and config-key checks, the tar option-value and archive-slot tables,
+#: and the literal-self-only remote host check. Re-measured.
+_PACKAGE_LINE_BUDGET = 37_010
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
