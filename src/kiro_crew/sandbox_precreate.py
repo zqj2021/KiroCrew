@@ -387,6 +387,13 @@ _CREW_PRECREATE_READONLY_FILE_LEAVES: tuple[str, ...] = (
     # -- the DEFAULT before any grant -- leaving it creatable from inside the
     # namespace sandbox.
     "ssh_auth_sock_consent.json",
+    # The project-hooks choice satisfies both criteria the same way:
+    # ``project_hooks_consent`` reads a pre-created ``{}`` as no choice, what an
+    # absent file means (criterion 1); an unreadable record reads as hooks off,
+    # narrower still. The writer rewrites the record IN PLACE (same inode), so the
+    # read-only bind of this name keeps covering it after a save (criterion 2), and
+    # the name is also a hidden leaf, so a sandboxed process never reads a grant.
+    "project_hooks_consent.json",
     # The credential-redaction switch satisfies both criteria the way
     # ``ssh_auth_sock_consent.json`` does: ``redaction_switch.read_state`` reads
     # absent, empty and unreadable alike as ENABLED, so a pre-created ``{}``

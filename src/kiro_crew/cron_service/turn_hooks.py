@@ -22,6 +22,7 @@ spec's hooks, which is what it did before, and its result says so.
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import TYPE_CHECKING, Any
 
@@ -60,8 +61,15 @@ class CronTurnHooks:
 
         agent = running_agent(provider, agent)
         turn = ScriptHookTurn(session_key, prompt, store_hooks=False)
-        hooks = await ChannelTurnHooks.prepare(provider, agent, turn)
-        stale = await cls._stale(provider, agent, hooks.spec, hook_projection_stale)
+        # Cron is unchanged by a folder's project-hooks choice: its turn never
+        # reads a KAS folder agent's own hooks, only the user-level spec's.
+        hooks = await ChannelTurnHooks.prepare(provider, agent, turn, project_hooks=False)
+        stale = await cls._stale(
+            provider,
+            agent,
+            hooks.spec,
+            functools.partial(hook_projection_stale, project_hooks=False),
+        )
         if stale:
             empty = TurnSpecHooks([], hooks.spec.cwd, False, False, hooks.spec.lost)
             hooks = ChannelTurnHooks(provider, turn, empty)

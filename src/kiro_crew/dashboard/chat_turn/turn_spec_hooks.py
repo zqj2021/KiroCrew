@@ -13,8 +13,11 @@ from kiro_crew.agent_files import is_kirocrew_default_agent
 from kiro_crew.agent_sdk.backends import ACP_BACKENDS_CREW_ENFORCES_SPEC_TOOLS_SETTINGS
 from kiro_crew.agent_sdk.kas_engine import keeps_mcp_oauth
 from kiro_crew.agent_sdk.spec_hooks import (
+    _MAX_SPEC_HOOKS,
     OverlongHookCommand,
     crew_fired_spec_hooks,
+    kas_hook_checkout,
+    kas_project_hooks_state,
     merge_user_hook_files,
     observer_spec_hooks,
     overlong_spec_hook_commands,
@@ -52,6 +55,7 @@ from kiro_crew.dashboard.state import (
 )
 from kiro_crew.hooks import (
     HOOK_EVENT_AGENT_SPAWN,
+    HOOK_EVENT_POST_TOOL_USE,
     HOOK_EVENT_PRE_TOOL_USE,
     HOOK_EVENT_STOP,
     HOOK_EVENT_USER_PROMPT_SUBMIT,
@@ -243,6 +247,7 @@ async def _prepare_spec_hooks(
                 # The session and app the KAS projection judged `trustedAgents` for.
                 governance_session_key=provider_session_key(client),
                 governance_app=app if isinstance(app, str) else None,
+                kas_checkout=kas_hook_checkout(client),
                 **by_session,
             )
         )
@@ -301,7 +306,124 @@ async def _prepare_spec_hooks(
         # where the user files now run.
         if is_kas:
             await _surface_withheld_project_hook_files(state, slot, client)
+            await _surface_kas_project_hooks(state, slot, client, agent)
     return hooks, False, work_dir
+
+
+#: ``meta.project_hooks`` of the KAS project-hooks notice row
+#: (``website/src/pages/chat/ProjectHooksNotice.tsx`` matches on these).
+PROJECT_HOOKS_NOTICE_OFF = "off"
+PROJECT_HOOKS_NOTICE_ON = "on"
+PROJECT_HOOKS_NOTICE_KIRO_CLI = "kiro_cli"
+
+
+#: The longest command a notice row shows, and the most rows it lists: every hook
+#: Crew would fire (``spec_hooks._MAX_SPEC_HOOKS``), so "Turn on" never enables a
+#: hook the owner was not shown.
+_PROJECT_HOOK_COMMAND_CHARS = 500
+_PROJECT_HOOK_ROWS = _MAX_SPEC_HOOKS
+
+
+def _project_hooks_notice_text(agent: str, state_: str, path: str) -> str:
+    # State first, then who supplies the checks, where they live and what they
+    # do, in one term, "project hooks", so the owner can decide before choosing.
+    source = (
+        f"This repo's agent file {path} gives agent {agent} checks that run as "
+        "commands on this computer before and after its tool calls and around your messages."
+    )
+    if state_ == PROJECT_HOOKS_NOTICE_KIRO_CLI:
+        return (
+            f"ℹ Project hooks are running because you trusted this folder in kiro-cli. {source} "
+            "Turn off stops them in Crew only; kiro-cli's trust is unchanged."
+        )
+    if state_ == PROJECT_HOOKS_NOTICE_ON:
+        return f"ℹ Project hooks are running because you turned them on for this folder. {source}"
+    return (
+        f"ℹ Project hooks are off for this folder. {source} Open Show commands to read them first."
+    )
+
+
+#: Each hook event in plain words, for the row's command list.
+_PROJECT_HOOK_WHEN = {
+    HOOK_EVENT_AGENT_SPAWN: "when the agent starts",
+    HOOK_EVENT_USER_PROMPT_SUBMIT: "when you send a message",
+    HOOK_EVENT_PRE_TOOL_USE: "before a tool runs",
+    HOOK_EVENT_POST_TOOL_USE: "after a tool runs",
+    HOOK_EVENT_STOP: "when a turn ends",
+}
+
+
+def _cut_hook_command(command: str) -> str:
+    """*command* cut to the row's bound, with a visible marker and its full length.
+
+    The owner reads this row before turning the hooks on, so a cut must never
+    look like the whole command.
+    """
+    if len(command) <= _PROJECT_HOOK_COMMAND_CHARS:
+        return command
+    return f"{command[:_PROJECT_HOOK_COMMAND_CHARS]}… (cut, {len(command)} chars)"
+
+
+def _project_hook_rows(hooks: tuple[tuple[str, str], ...]) -> list[dict[str, str]]:
+    """The notice's read-only ``(event, command)`` rows, bounded.
+
+    Each command is redacted WHOLE before it is cut: a cut first could split a
+    credential so the redactor cannot recognise what is left of it.
+    """
+    return [
+        {
+            "event": event,
+            "when": _PROJECT_HOOK_WHEN.get(event, event),
+            "command": _cut_hook_command(_redact_display_text(command)),
+        }
+        for event, command in hooks[:_PROJECT_HOOK_ROWS]
+    ]
+
+
+async def _surface_kas_project_hooks(
+    state: "DashboardState", slot: "_ChatSlot", client: Any, agent: str
+) -> None:
+    """One notice row, with a Turn on / Turn off link, for a folder agent's own hooks.
+
+    Only for a KAS session whose agent is project-only and sets ``hooks``
+    (:func:`kas_project_hooks_state`). When they run because kiro-cli trusts the
+    folder, the row shows once per folder (``project_hooks_consent``). The other
+    paths (sub-agent, task runner, channel) never show it: they only read the
+    stored choice. Best-effort: a failed check renders nothing.
+    """
+    from kiro_crew.project_hooks_consent import mark_kiro_cli_notice_shown
+
+    checkout = kas_hook_checkout(client)
+    agent = session_agent(client, agent)
+    if not checkout or not agent:
+        return
+    try:
+        found = await asyncio.to_thread(kas_project_hooks_state, agent, checkout)
+        state_ = found.state
+        if state_ == PROJECT_HOOKS_NOTICE_KIRO_CLI and not await asyncio.to_thread(
+            mark_kiro_cli_notice_shown, checkout
+        ):
+            return
+    except Exception:  # noqa: BLE001 - a notice must never fail a turn
+        logger.debug("could not check %r's folder hooks for the notice", agent, exc_info=True)
+        return
+    if not state_:
+        return
+    append_and_surface(
+        state,
+        slot,
+        "notice",
+        _redact_display_text(_project_hooks_notice_text(agent, state_, found.path)),
+        "msg msg-info",
+        meta={
+            "kind": SPEC_HOOKS_NOTICE_KIND,
+            "project_hooks": state_,
+            "project_hooks_folder": checkout,
+            # Read-only list for the row's "Show commands": redacted like the
+            # row's text, cut to a bounded size.
+            "project_hooks_commands": _project_hook_rows(found.hooks),
+        },
+    )
 
 
 def _pre_tool_hooks_run_nowhere_notice(agent: str) -> str:

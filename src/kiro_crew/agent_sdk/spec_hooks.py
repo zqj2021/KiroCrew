@@ -72,6 +72,12 @@ from typing import TYPE_CHECKING, Any, NamedTuple
 
 from kiro_crew.agent_sdk.backend_mcp_ability import ability_for
 from kiro_crew.agent_sdk.capabilities import capabilities_of
+from kiro_crew.agent_sdk.kas_project_hooks import (  # noqa: F401 - re-exported
+    KasProjectHooks,
+    _consented_kas_project_hooks,
+    _live_bot_owns,
+    kas_project_hooks_state,
+)
 from kiro_crew.hooks import (
     _HOOK_STREAM_CAP_BYTES,
     HOOK_EVENT_AGENT_SPAWN,
@@ -1129,7 +1135,11 @@ def _convert(agent_id: str, spec: dict[str, Any]) -> tuple[tuple[ScriptHook, ...
 
 
 def _agent_spec(
-    agent_id: str, project_dir: str | None = None, session_key: str = ""
+    agent_id: str,
+    project_dir: str | None = None,
+    session_key: str = "",
+    *,
+    kas_checkout: str | None = None,
 ) -> dict[str, Any]:
     """*agent_id*'s spec, or ``{}`` when it has none on disk.
 
@@ -1152,12 +1162,20 @@ def _agent_spec(
     session's merged spec (``mate_worker.mate_service_scope_spec``), the one its
     projection was handed, so the hooks its crewmate's file carries are the ones
     that fire.
+
+    *kas_checkout* is a KAS session's own folder (:func:`kas_hook_checkout`): a
+    project-only agent's ``hooks`` are read from it when the folder's project-hooks
+    choice is on (:func:`_consented_kas_project_hooks`).
     """
-    return _agent_spec_with_origin(agent_id, project_dir, session_key)[0]
+    return _agent_spec_with_origin(agent_id, project_dir, session_key, kas_checkout=kas_checkout)[0]
 
 
 def _agent_spec_with_origin(
-    agent_id: str, project_dir: str | None = None, session_key: str = ""
+    agent_id: str,
+    project_dir: str | None = None,
+    session_key: str = "",
+    *,
+    kas_checkout: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     """:func:`_agent_spec` and where it came from: ``"project"`` or ``"user"``."""
     # circular import: the ACP layer imports the config loader, which sits below
@@ -1187,8 +1205,37 @@ def _agent_spec_with_origin(
             return spec, "project"
     agents_dir = spec_dir_for(agent_id)
     if agent_spec_absent(agents_dir, agent_id):
+        if kas_checkout:
+            consented = _consented_kas_project_hooks(agent_id, kas_checkout)
+            if consented is not None:
+                return consented, "project"
         return {}, "user"
     return load_agent_spec(agents_dir, agent_id), _user_dir_origin(agents_dir)
+
+
+#: The session-key prefix of a cron turn's session. Cron turns never run a KAS
+#: folder agent's own hooks (:func:`turn_spec_hooks`, ``project_hooks=False``).
+CRON_SESSION_KEY_PREFIX = "cron:"
+
+
+def kas_hook_checkout(provider: object) -> str | None:
+    """A KAS session's own folder, the one a project-only agent's hooks may come from.
+
+    ``None`` off KAS: the other backends that Crew fires spec hooks for resolve the
+    checkout through :func:`spec_project_dir` instead. ``None`` for a ``cron:``-keyed
+    session too, the rule its projection follows (``KasHarness.session_extras``), so
+    firing and the stale check never count folder hooks the batch was built without.
+    shortcut: a human follow-up in a cron tab shares that session and key, so it runs
+    no folder hooks either; splitting them needs a per-turn flag (P1-34 follow-up).
+    """
+    from kiro_crew.agent_sdk.backends import ACP_BACKEND_KAS
+
+    if capabilities_of(provider).backend == ACP_BACKEND_KAS:
+        if provider_session_key(provider).startswith(CRON_SESSION_KEY_PREFIX):
+            return None
+        cwd = getattr(provider, "cwd", "")
+        return cwd if isinstance(cwd, str) and cwd else None
+    return None
 
 
 def _user_dir_origin(agents_dir: Path) -> str:
@@ -1292,6 +1339,7 @@ def crew_fired_spec_hooks(
     discards_mcp_oauth: bool = False,
     governance_session_key: str = "",
     governance_app: str | None = None,
+    kas_checkout: str | None = None,
 ) -> tuple[list[ScriptHook], list[str], int]:
     """The active agent spec's hooks as script hooks, the keys nothing carries, and
     how many ``confirm: true`` hooks are skipped.
@@ -1308,12 +1356,15 @@ def crew_fired_spec_hooks(
     reads a crewmate's worker as that session's merged spec (:func:`_agent_spec`).
     *governance_session_key* and *governance_app* are the session and app the KAS
     projection judged a ``trustedAgents`` allow for, so the notice judges it alike.
+    *kas_checkout* is :func:`kas_hook_checkout` of the session.
     """
     # circular import: the ACP layer imports the config loader, which sits below
     # this module; resolved at call time like the other driver seams here.
     from kiro_crew.acp.kas_agents import spec_keys_without_carrier
 
-    spec, origin = _agent_spec_with_origin(agent_id, project_dir, session_key)
+    spec, origin = _agent_spec_with_origin(
+        agent_id, project_dir, session_key, kas_checkout=kas_checkout
+    )
     hooks, unconfirmable = _convert(agent_id, spec)
     lost = spec_keys_without_carrier(
         spec,
@@ -1580,7 +1631,9 @@ def provider_session_key(provider: object) -> str:
     return ""
 
 
-async def turn_spec_hooks(provider: object, agent_id: str) -> TurnSpecHooks:
+async def turn_spec_hooks(
+    provider: object, agent_id: str, *, project_hooks: bool = True
+) -> TurnSpecHooks:
     """The spec hooks a subagent or task-runner turn gates on, and how.
 
     *provider* and *agent_id* are the turn's OWN: a subagent runs its own agent on
@@ -1592,6 +1645,9 @@ async def turn_spec_hooks(provider: object, agent_id: str) -> TurnSpecHooks:
     On a backend that fires only :data:`OBSERVER_HOOK_EVENTS` (claude) the turn
     is not gated: it gets those hooks, and an agent that cannot be named or a
     spec that cannot be read leaves it with none.
+
+    *project_hooks* false (a cron turn) never reads a KAS folder agent's own
+    hooks, whatever the folder's choice; the user-level spec's hooks still fire.
     """
     if _fires_observer_spec_hooks_only(provider):
         return await _observer_turn_spec_hooks(provider, agent_id)
@@ -1619,6 +1675,7 @@ async def turn_spec_hooks(provider: object, agent_id: str) -> TurnSpecHooks:
                 translates_tools_settings=on_kas,
                 discards_mcp_oauth=on_kas and not keeps_mcp_oauth(provider),
                 session_key=session_key,
+                kas_checkout=kas_hook_checkout(provider) if project_hooks else None,
             )
         )
     except Exception:  # noqa: BLE001 - the caller fails permission requests closed
@@ -1665,7 +1722,9 @@ async def _observer_turn_spec_hooks(provider: object, agent_id: str) -> TurnSpec
     return TurnSpecHooks(observer_spec_hooks(hooks), work_dir, False, False)
 
 
-async def hook_projection_stale(provider: object, agent_id: str) -> bool:
+async def hook_projection_stale(
+    provider: object, agent_id: str, *, project_hooks: bool = True
+) -> bool:
     """Whether *provider*'s live session auto-approves a capability a PreToolUse hook
     now covers.
 
@@ -1708,7 +1767,8 @@ async def hook_projection_stale(provider: object, agent_id: str) -> bool:
         )
 
         # A built-in mode with no spec: only the Hooks page's hooks count.
-        spec = _agent_spec(agent_id, None, session_key)
+        checkout = kas_hook_checkout(provider) if project_hooks else None
+        spec = _agent_spec(agent_id, None, session_key, kas_checkout=checkout)
         matchers = pre_tool_hook_matchers(agent_id, spec)
         still: set[str] = set()
         for part in parts:
