@@ -244,6 +244,14 @@ _GUEST_UNVERIFIABLE_ITEM = "\x00<governance:guest-target-unverifiable>"
 #: allow-prefix whenever the gateway runs there.
 _NO_TARGET_ITEM = "/\x00<governance:own-scope-target-absent-unverifiable>"
 
+#: Same never-permittable construction, for a shell call's recovered command that
+#: :func:`~kiro_crew.platform.allowed_commands.chain_commands` cannot split into
+#: plain commands (a quote in a chain, a redirect, a substitution, a newline, too
+#: long). ``gate_decision`` asks it beside the whole command, so an allow-mode
+#: ``commands`` set refuses a command it cannot check part by part, while a
+#: deny-mode or ungoverned scope permits it.
+_UNSPLITTABLE_COMMAND_ITEM = "\x00<governance:shell-command-unsplittable-unverifiable>"
+
 
 def _governed_targets(
     paths: Iterable[str], root: Optional[str], also_local: bool = False

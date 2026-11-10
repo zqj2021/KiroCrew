@@ -44,3 +44,79 @@ def test_a_command_the_deny_does_not_name_still_asks() -> None:
     _deny_backdoor()
     verdict = _judge(_shell("git status --porcelain"), ["git status.*"])
     assert verdict.action == TOOL_ALLOW
+
+
+# ── an allow-mode ``commands`` policy ─────────────────────────────────────────
+
+
+def _allow_git_status() -> None:
+    _install_governance(
+        {"commands": {"mode": "allow", "allow": ["git status", "git status --porcelain"]}}
+    )
+
+
+def test_an_allow_mode_policy_admits_a_listed_command() -> None:
+    """The title ``Run Command`` is not on the list, and it names no command: the
+    recovered command is what the list is about. The call then prompts as usual."""
+    _allow_git_status()
+    verdict = _judge(_shell("git status --porcelain"), [])
+    assert verdict.action == TOOL_ALLOW
+    assert verdict.tier != "governance"
+
+
+def test_an_allow_mode_policy_lets_a_listed_command_take_its_grant() -> None:
+    _allow_git_status()
+    verdict = _judge(_shell("git status"), ["git status"])
+    assert verdict.action != TOOL_DENY
+
+
+def test_an_allow_mode_policy_still_refuses_an_unlisted_command() -> None:
+    _allow_git_status()
+    verdict = _judge(_shell("ls"), [])
+    assert (verdict.action, verdict.tier) == (TOOL_DENY, "governance")
+
+
+def test_an_allow_mode_policy_refuses_a_chain_with_an_unlisted_part() -> None:
+    _allow_git_status()
+    verdict = _judge(_shell("git status && echo x"), ["git status", "echo .*"])
+    assert (verdict.action, verdict.tier) == (TOOL_DENY, "governance")
+
+
+def test_an_explicit_deny_on_the_title_still_refuses() -> None:
+    _install_governance({"commands": {"mode": "deny", "deny": ["Run Command"]}})
+    verdict = _judge(_shell("git status"), [])
+    assert (verdict.action, verdict.tier) == (TOOL_DENY, "governance")
+
+
+# ── an allow-mode glob is checked against each chained command ────────────────
+
+
+def _allow_git_glob() -> None:
+    _install_governance({"commands": {"mode": "allow", "allow": ["git *"]}})
+
+
+def test_an_allow_mode_glob_refuses_a_chain_whose_glob_spans_the_separator() -> None:
+    """``git *`` matches the whole ``git status && python3 -c x`` because ``*``
+    crosses ``&&``; the chained ``python3 -c x`` is not listed, so it refuses."""
+    _allow_git_glob()
+    verdict = _judge(_shell("git status && python3 -c x"), [])
+    assert (verdict.action, verdict.tier) == (TOOL_DENY, "governance")
+
+
+def test_an_allow_mode_glob_admits_a_chain_whose_every_part_is_listed() -> None:
+    _allow_git_glob()
+    verdict = _judge(_shell("git status && git log"), [])
+    assert verdict.tier != "governance"
+    assert verdict.action != TOOL_DENY
+
+
+def test_an_allow_mode_glob_refuses_a_command_that_cannot_be_split() -> None:
+    _allow_git_glob()
+    verdict = _judge(_shell("git status > out.txt"), [])
+    assert (verdict.action, verdict.tier) == (TOOL_DENY, "governance")
+
+
+def test_a_deny_mode_policy_permits_a_command_that_cannot_be_split() -> None:
+    _deny_backdoor()
+    verdict = _judge(_shell("git status > out.txt"), [])
+    assert verdict.tier != "governance"

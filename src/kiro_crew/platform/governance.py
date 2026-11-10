@@ -1396,6 +1396,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _RUNNING_PREFIX,
         _TRUNCATED_SCAN_ITEM,
         _UNANCHORED_TARGET_ITEM,
+        _UNSPLITTABLE_COMMAND_ITEM,
         CU_CLASS_CONTROL,
         CU_CLASS_KEYBOARD,
         CU_CLASS_MUTATE,
