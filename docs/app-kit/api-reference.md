@@ -682,6 +682,69 @@ composer and source strip, which an app page does not have.
 | `selectedUrl` | `string` | yes | The url of the one shown |
 | `onSelect` | `(url: string) => void` | yes | Called when the user picks another tab |
 
+## Issue List
+
+`useIssues`, `IssueList` and `IssueCard` show issues from GitHub, GitLab, Jira and
+Linear through one query and one result shape (`IssueSummary`). They need
+`APP_SDK_LEVEL >= 5` and `/api/source/issues` in your manifest's `permissions.api`.
+Without the declaration, or outside an app, the components render a refusal naming
+the path and send nothing; the hook reports an `AppApiPermissionError`. Declaring
+`/api/source/issue` (one issue) does not cover the list. A built-in page keeps the
+dashboard's client. [issues-guide.md](issues-guide.md) walks through a first list.
+
+```tsx
+import * as sdk from '@kirocrew/app-sdk'
+
+sdk.APP_SDK_LEVEL >= 5 && sdk.IssueList
+  ? <sdk.IssueList query={{ provider: 'linear', scope: 'ENG', state: 'open' }} view="expanded" showFilters />
+  : <a href="https://linear.app">Open Linear</a>
+```
+
+The query is the body of `POST /api/source/issues`:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `provider` | `'github' \| 'gitlab' \| 'jira' \| 'linear'` | Which provider to read |
+| `scope` | `string` | GitHub `owner/repo`, GitLab project path, Jira project key or Linear team key |
+| `host` | `string?` | GitHub Enterprise, self-managed GitLab or Jira site host |
+| `state` | `'open' \| 'closed' \| 'all'` | Defaults to `open` |
+| `assignee`, `author` | `string?` | A login; `assignee: 'me'` is the signed-in user |
+| `labels` | `string[]?` | Label filter |
+| `text` | `string?` | Search text |
+| `sort`, `order` | `'updated' \| 'created'`, `'desc' \| 'asc'` | Ordering |
+| `raw` | `string?` | A provider-native query |
+| `limit` | `number?` | Page size, 1 to 100, default 25 |
+
+`useIssues(query, { enabled? })` pages through the response's `nextCursor`. The query
+minus its cursor is the cache key, so a changed query starts again from the first
+page.
+
+| Returns | Type | Purpose |
+|---|---|---|
+| `issues` | `IssueSummary[]` | Every page loaded so far |
+| `isLoading` | `boolean` | The first page is loading |
+| `error` | `Error \| null` | The last failure, or the refusal |
+| `hasNextPage`, `fetchNextPage` | `boolean`, `() => void` | Paging |
+| `isFetchingNextPage` | `boolean` | A next page is loading |
+| `refetch` | `() => void` | Read every loaded page again |
+
+| `IssueList` prop | Type | Required | Purpose |
+|---|---|---|---|
+| `query` | `IssueQuery` | yes | What to list; a new query replaces the filter bar's edits |
+| `view` | `'condensed' \| 'expanded'` | no | One row per issue (default) or one card |
+| `showFilters` | `boolean` | no | State, assignee (`me` included), labels and search text |
+| `onSelect` | `(issue: IssueSummary) => void` | no | Makes each row a button; without it a row links out |
+| `emptyText` | `string` | no | Replaces the empty-state text |
+
+`IssueCard` takes `issue`, `view` and `onSelect` and renders one issue on its own.
+The condensed row shows the provider mark, the key (`#4821`, `CREW-142`), the title,
+up to two labels (hidden when narrow), the provider's `statusLabel` and the updated
+time. The expanded card adds the project, a three-line excerpt, priority, every
+label, the first assignee, the author, comment and linked-change counts, and an
+**Open in &lt;provider&gt;** link. Every provider string is rendered as text, links
+open only `http(s)` urls in a new tab with `rel="noopener noreferrer"`, and an avatar
+loads only from an `http(s)` url.
+
 ## Chat Marker Protocol
 
 An agent encodes UI affordances inline in the prose it streams. A surface that renders a transcript
@@ -1568,7 +1631,8 @@ adds the manifest's `credentialMasks` (see
 [manifest-reference.md](manifest-reference.md#credential-masks)), and level 4 adds the
 `agentTools` keys `namespace`, `timeoutSeconds` and `result` and an app's own bell
 notes (`/api/notifications/own` and the dashboard's `useAppNotifications()`, see
-[Backend Environment Variables](#backend-environment-variables)); each level
+[Backend Environment Variables](#backend-environment-variables)), and level 5 adds the
+dashboard's [issue list](#issue-list) (`useIssues`, `IssueList`, `IssueCard`); each level
 includes every level below it. Read it
 with `getattr(ctx, "sdk_level", 0)`. When it is lower than your app needs, call
 `ctx.health.mark_degraded(...)` with the consequence and keep serving what you can.

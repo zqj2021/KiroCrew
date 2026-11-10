@@ -128,6 +128,72 @@ export interface IssueSource {
   failedSections?: string[]
 }
 
+/* ── Issue lists (POST /api/source/issues) ────────────────────────────────
+ * One query shape for GitHub, GitLab, Jira and Linear. Errors use the same
+ * envelope as POST /api/source/issue. */
+
+/** A list query. `scope` is a GitHub `owner/repo`, a GitLab project path, a
+ *  Jira project key or a Linear team key. `assignee` accepts `'me'`. `raw` is a
+ *  provider-native query. `cursor` is a response's `nextCursor`. */
+export interface IssueQuery {
+  provider: 'github' | 'gitlab' | 'jira' | 'linear'
+  scope: string
+  host?: string
+  /** Defaults to `'open'`. */
+  state?: 'open' | 'closed' | 'all'
+  assignee?: string
+  author?: string
+  labels?: string[]
+  text?: string
+  sort?: 'updated' | 'created'
+  order?: 'desc' | 'asc'
+  raw?: string
+  /** 1..100, defaults to 25. */
+  limit?: number
+  cursor?: string | null
+  refresh?: boolean
+}
+
+/** A person as the provider reports them. All three are provider-controlled. */
+export interface IssuePerson {
+  login: string; name: string; avatarUrl: string
+}
+
+/** One issue in a list, the same shape for every provider. */
+export interface IssueSummary {
+  provider: IssueQuery['provider']
+  url: string
+  /** The display key: `#4821`, `CREW-142`, `ENG-77`. */
+  key: string
+  number: number | null
+  title: string
+  state: 'open' | 'closed'
+  /** The provider's own status name ("In Progress", "Done", "open"). */
+  statusLabel: string
+  labels: IssueLabel[]
+  assignees: IssuePerson[]
+  author: IssuePerson | null
+  priority: string | null
+  commentCount: number
+  /** ISO8601. */
+  createdAt: string
+  updatedAt: string
+  /** Plain text, never markdown or HTML. */
+  excerpt: string
+  project: string
+  linkedChanges: IssueLinkedChange[]
+}
+
+export interface IssueQueryResponse {
+  provider: IssueQuery['provider']
+  scope: string
+  issues: IssueSummary[]
+  /** Null on the last page. */
+  nextCursor: string | null
+  /** Null when the provider does not report a total. */
+  total: number | null
+}
+
 /** A single contributor to an app's source repository (GitHub only, v1).
  *  Names and avatar URLs are provider-controlled — render as text / <img>. */
 export interface AppContributor {
