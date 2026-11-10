@@ -873,6 +873,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _remove_deleted_agent_leftovers,
     )
     from kiro_crew.cli_commands_app import (  # noqa: F401
+        _APP_SIGNING_KEY_ENV,
         _MEMBER_THREADS_DESC,
         _SESSION_APPROVAL_CONSENT_REQUIRED,
         _SESSION_APPROVAL_DESC,
@@ -883,6 +884,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _deregister_or_report,
         _handle_app,
         _handle_app_import,
+        _handle_app_sign,
         _install_app_through_gateway,
         _print_file_only_app_result,
         _print_pointer_cleanup,

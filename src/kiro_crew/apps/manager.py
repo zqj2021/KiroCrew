@@ -303,7 +303,11 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
         protected_app_state,
     )
     from kiro_crew.apps.admission import (  # noqa: F401
+        admission_audit_error,
+        admission_audit_resources,
+        admission_refusal_text,
         app_admission_denied,
+        builtin_admission_exempt,
     )
     from kiro_crew.apps.composer_action_grants import (  # noqa: F401
         composer_action_grant_row,

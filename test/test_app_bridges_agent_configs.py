@@ -219,6 +219,9 @@ class TestBuiltinDeclaredResourcesActuallyRegister:
         declared = {f.name for f in dataclasses.fields(AppManifest)}
         # ``extra`` is the catch-all bag, splatted into the dict by key.
         declared.discard("extra")
+        # ``document`` is the parsed app.json object itself, kept for signature
+        # scheme 2; it is the input, not a declaration.
+        declared.discard("document")
         # Parser diagnostics reject a manifest; they are not declarations copied
         # into a valid builtin's persisted manifest.
         declared.discard("config_keys_error")
@@ -1319,7 +1322,7 @@ class TestRefreshAppAgentsReportsIoFailures:
         monkeypatch.setattr(
             brmod,
             "_registration_denied",
-            lambda name, action, app_root: None,
+            lambda name, action, app_root, manifest=None: None,
         )
 
     def test_an_io_failure_is_collected(self, monkeypatch, tmp_path):
@@ -1375,7 +1378,9 @@ class TestRefreshAppAgentsReportsIoFailures:
         import kiro_crew.apps.bridges as brmod
 
         self._wire(monkeypatch, brmod, tmp_path)
-        monkeypatch.setattr(brmod, "_registration_denied", lambda name, action, app_root: "revoked")
+        monkeypatch.setattr(
+            brmod, "_registration_denied", lambda name, action, app_root, manifest=None: "revoked"
+        )
         scrubbed: list[str] = []
         monkeypatch.setattr(brmod, "_deregister_agents", lambda name: scrubbed.append(name))
         monkeypatch.setattr(
