@@ -1291,11 +1291,11 @@ user-owned Google client can serve all six: the user registers every card's
 redirect URI on it and saves it once (`oauth-app-registration/google.md`, with
 `scripts/google-oauth-setup.sh` / `.ps1` doing the gcloud part). All six
 entries point `registration_guide` at that one guide. Storage stays per card:
-nothing in `oauth_clients.py` links the six. The Settings → OAuth Apps Google
-cards carry an **Also save on (the other Google products)** toggle, on by default,
-that, when the Save carries a Client ID and a new secret (a whole pair), makes
+nothing in `oauth_clients.py` links the six. The one Google entry on Settings →
+Connections carries an **Also save on (the other Google products)** toggle, on by
+default, that, when the Save carries a Client ID and a new secret (a whole pair), makes
 one Save send the same PUT to every other Google card (`isGoogleSlug` in
-`ConnectionsPanel.tsx`: `gmail` or a `google-` slug); a card that fails is
+`connectionsLinks.ts`: `gmail` or a `google-` slug); a card that fails is
 named in the error and Save stays available to retry. Turned off, a card saves
 alone. Decision record: `rfc-connections-mcp-layout.md` §2.8.
 
@@ -1482,7 +1482,7 @@ regardless of `launch_gate_passed` (vendor approval still hides), because until
 a client exists the card is an instruction, not an offer: `/api/connections/status`
 marks the row `needsClientConfig` (only while no grant is held), and the card
 renders the sixth state `needs-configuration` — a lock badge, the Documentation
-link, and a **Configure OAuth app** route to **Settings → OAuth Apps** in place
+link, and a **Set up <provider>** button that opens the card's OAuth app in place
 of Connect. What the setup involves (a guided settings page, nothing changes
 until saved, removable later, registers an app and enters its client ID and
 secret) is the row's pre-action caveat, so it sits behind the amber triangle
