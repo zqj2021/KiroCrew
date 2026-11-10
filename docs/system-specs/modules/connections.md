@@ -35,7 +35,7 @@ from that boundary. The credential-boundary detail lives in
 
 One thing that looks like an exception is not one. A provider whose MCP server
 refuses dynamic client registration (`auth.mode: "preregistered"` in the
-registry — GitHub, Asana and the six Google Workspace entries today) needs an OAuth **app** an operator registered
+registry — GitHub, Asana, the six Google Workspace entries and Slack today) needs an OAuth **app** an operator registered
 in the vendor console, and a confidential app comes with a `client_secret`. That
 secret is the operator's *application* credential, not any user's grant: the
 grant still lives with kiro-cli and nothing here reads it. Kiro Crew keeps the
@@ -1151,6 +1151,7 @@ mounts or gates on it.
 | TickTick | project-management | 2 | yes / yes | none — `tasks:read` and `tasks:write` are the whole `scopes_supported` list and there is no read-only endpoint; the entry's `gotcha_copy` names the delete tools | shown | — |
 | Railway | developer-tools | 2 | yes / yes | none — `workspace:member` is the only scope the resource metadata publishes; the consent screen picks the workspaces, and the entry's `gotcha_copy` names the deploy and delete tools | gated | manual launch-gate check, including a `tools/list` against the hosted tool roster Railway documents and a session held past the access-token expiry (Railway documents refresh tokens only for `offline_access`, which the entry does not request) |
 | Quo | calendar-email | 2 | yes / yes | request `read:account`, `read:conversations` and `read:calls` only | gated | manual launch-gate check, including which tools a read-only grant can still call and whether Quo lists the grant anywhere a user can revoke it (its docs name the client's Disconnect and an RFC 7009 revocation endpoint) |
+| Slack | collaboration-docs | 2 | **no** / yes — pre-registered public PKCE client (`auth.mode`, `confidential` false) | read user scopes only (search, history, lists, files, canvases) | shown as "needs configuration" until an operator enters a client ID; Connect after | manual launch-gate check with an operator-registered internal app ([runbook](../../guides/oauth-app-registration/slack.md)) |
 
 Tier is provider *categorization* (see the tiers note above), never mint
 latency: tier 3 means the vendor gates clients by allowlist or waitlist, so
@@ -1282,7 +1283,8 @@ adding a provider, never by renumbering one;
 `test_connections_registry_auth.py` pins the shipped values so a change fails
 loudly. Shipped ports: GitHub 48101, Asana 48102, Google Drive 48103, Gmail
 48104, Google Calendar 48105, Google Sheets 48109, Google Docs 48110, Google
-Slides 48111; 48106–48108 are reserved by the Slack, HubSpot and Box runbooks.
+Slides 48111, Slack 48106 (on `localhost`, the only plain-http host Slack accepts);
+48107–48108 are reserved by the HubSpot and Box runbooks.
 
 **Google Workspace.** The six Google entries (Gmail, Drive, Calendar, Sheets,
 Docs, Slides) are ordinary pre-registered entries, one card and one stored
@@ -1433,7 +1435,7 @@ failing an ordinary Connect (#32217). The operator's client ID and the
 registry's redirect are read as they are, so a credential in the client ID still
 fails the row.
 
-Crew can hold GitHub, Asana and the six Google slugs (`crew_oauth.SUPPORTED_SLUGS`,
+Crew can hold GitHub, Asana, the six Google slugs and Slack (`crew_oauth.SUPPORTED_SLUGS`,
 one data entry each in `_ENDPOINTS`). Each slug keeps its own grant. Disconnect
 revokes upstream and deletes the vault entry, except a Google card while another
 Google card still holds a pair on the same account and from a client of the same
@@ -1442,6 +1444,31 @@ stored as the pair's `account`; the issuing client id is stored with each pair a
 compared by its leading project number. Google's revoke ends the whole grant
 across that project's clients, so that card deletes only its own entry and the
 last such Google card to disconnect revokes.
+
+Slack is the one public client (`auth.confidential` false): its app has PKCE on,
+so the code swap and refresh post `client_id` and the verifier, and a secret only
+when the operator saved one (`client_secret_post`, the one method Slack's
+authorization-server metadata lists). Slack answers errors as a 200 with
+`{"ok": false, "error": ...}`; `invalid_refresh_token` asks the user to reconnect.
+Its refresh tokens rotate and are single-use, which the commit-before-use refresh
+already handles. Disconnect revokes the access token with `auth.revoke` and reads
+`revoked` from the body; Slack has no endpoint that revokes a refresh token, so
+that token lives on upstream until Slack's 30-day expiry, and the card's revoke
+page ends the whole grant. Every strip of the operator's client
+(`oauth_clients.strip_preregistered_oauth_client`) removes all three owned keys
+and then puts back, whole, a public client the user wrote on their own entry in a
+raw `mcp.json` scope (`oauth_clients.user_oauth_client`: its `clientId` and any
+`redirectUri` and `clientSecret` beside it), never one read off a rendered spec,
+which may be the operator's. That covers the spec rebuild
+(`default_spec_commit._apply_operator_oauth_client`, on KAS too), a scope copy
+taken from the rendered spec, and the client-removal scrub of each `mcp.json`.
+So a Slack server set up
+with its own client before Slack joined the registry keeps signing in there.
+With no OAuth Apps record, Crew's own sign-in reuses that entry's `clientId`
+and scopes (`crew_oauth.server_oauth_hints`, client source `server`), and the
+card and the mint gate count it as configured with the preview on or off (off,
+kiro-cli signs in with the same id from the rendered entry). The entry is
+read only; nothing edits or deletes it.
 
 Crew can also hold the seven visible DCR cards (Atlassian, Notion, Linear, Stripe,
 Vercel, GitLab, TickTick: `crew_oauth.DCR_SLUGS`), with no operator client

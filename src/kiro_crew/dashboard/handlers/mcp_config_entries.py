@@ -83,10 +83,23 @@ def _find_server_spec_anywhere(name: str) -> dict | None:
         from kiro_crew.connections.oauth_clients import (  # noqa: PLC0415
             provider_for_server,
             strip_preregistered_oauth_client,
+            user_oauth_client,
         )
 
-        if provider_for_server(name, found) is not None:
-            found = strip_preregistered_oauth_client(found)
+        provider = provider_for_server(name, found)
+        if provider is not None:
+            # The client the user wrote in a raw scope survives the copy whole;
+            # the projected one does not.
+            raw = [
+                _load_json_or_empty(path).get("mcpServers")
+                for path in (
+                    _kirocrew_mcp_json(),
+                    _GLOBAL_MCP_JSON,
+                    *[s.global_json for s in _extra_mcp_scopes()],
+                )
+            ]
+            mine = user_oauth_client(provider, name, found.get("url"), raw)
+            found = strip_preregistered_oauth_client(found, user_oauth=mine)
         return found
     for path in (
         _kirocrew_mcp_json(),

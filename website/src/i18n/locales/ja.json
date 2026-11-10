@@ -14480,7 +14480,8 @@
       "prerequisite_google_calendar": "Google は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Google のOAuth アプリを使います。Google の同意画面にはそのアプリ名が表示されます。承認して続行してください。",
       "prerequisite_google_sheets": "Google は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Google のOAuth アプリを使います。Google の同意画面にはそのアプリ名が表示されます。承認して続行してください。",
       "prerequisite_google_docs": "Google は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Google のOAuth アプリを使います。Google の同意画面にはそのアプリ名が表示されます。承認して続行してください。",
-      "prerequisite_google_slides": "Google は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Google のOAuth アプリを使います。Google の同意画面にはそのアプリ名が表示されます。承認して続行してください。"
+      "prerequisite_google_slides": "Google は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Google のOAuth アプリを使います。Google の同意画面にはそのアプリ名が表示されます。承認して続行してください。",
+      "prerequisite_slack": "Slack は動的クライアント登録に対応していないため、「接続」は設定 → OAuth アプリに登録した Slack のアプリを使います。そのアプリでは PKCE と Slack MCP サーバーを有効にしておく必要があります。Slack の同意画面にはそのアプリ名が表示されます。"
     },
     "contextBreakdown": {
       "axis_turn_n": "{{n}} ターン目",

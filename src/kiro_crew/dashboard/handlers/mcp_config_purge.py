@@ -197,6 +197,7 @@ def _scrub_preregistered_oauth_copies(slug: str) -> dict[str, str]:
     from kiro_crew.connections.oauth_clients import (  # noqa: PLC0415
         provider_for_server,
         strip_preregistered_oauth_client,
+        user_oauth_client,
     )
 
     actions: dict[str, str] = {}
@@ -222,10 +223,14 @@ def _scrub_preregistered_oauth_copies(slug: str) -> dict[str, str]:
             actions[label] = "noop"
             continue
         entry = servers.get(slug)
-        if not isinstance(entry, dict) or provider_for_server(slug, entry) is None:
+        provider = provider_for_server(slug, entry) if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or provider is None:
             actions[label] = "noop"
             continue
-        stripped = strip_preregistered_oauth_client(entry)
+        # This file IS a raw source, so a public client on its entry is the
+        # user's own (a copy carries only a raw-sourced client) and stays whole.
+        mine = user_oauth_client(provider, slug, entry.get("url"), [servers])
+        stripped = strip_preregistered_oauth_client(entry, user_oauth=mine)
         if stripped == entry:
             actions[label] = "noop"
             continue

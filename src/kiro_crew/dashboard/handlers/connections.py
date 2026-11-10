@@ -1132,6 +1132,7 @@ def _oauth_client_views() -> list[dict]:
     """The dashboard record for every pre-registered provider. Worker-thread only."""
     from kiro_crew.config import config_dir
     from kiro_crew.config.loader import read_config_for_update
+    from kiro_crew.connections import crew_oauth
     from kiro_crew.connections.oauth_clients import oauth_client_view
     from kiro_crew.connections.registry import get_preregistered_providers
     from kiro_crew.secrets import SecretVault
@@ -1145,7 +1146,14 @@ def _oauth_client_views() -> list[dict]:
     except Exception:  # noqa: BLE001 -- an unreadable vault must not take the tab down
         names = set()
     return [
-        dict(oauth_client_view(provider, config=config, vault_names=names))
+        dict(
+            oauth_client_view(
+                provider,
+                config=config,
+                vault_names=names,
+                server_client_id=crew_oauth.server_client_id(str(provider["slug"])),
+            )
+        )
         for provider in get_preregistered_providers()
     ]
 
@@ -1163,6 +1171,7 @@ def _oauth_client_configured(provider: Provider) -> bool:
         return True
     from kiro_crew.config import config_dir
     from kiro_crew.config.loader import read_config_for_update
+    from kiro_crew.connections import crew_oauth
     from kiro_crew.connections.oauth_clients import oauth_client_view
     from kiro_crew.secrets import SecretVault
 
@@ -1174,7 +1183,13 @@ def _oauth_client_configured(provider: Provider) -> bool:
         names = set(SecretVault(config_dir()).list_names())
     except Exception:  # noqa: BLE001 -- an unreadable vault reads as "not configured"
         names = set()
-    return bool(oauth_client_view(provider, config=config, vault_names=names).get("configured"))
+    view = oauth_client_view(
+        provider,
+        config=config,
+        vault_names=names,
+        server_client_id=crew_oauth.server_client_id(str(provider["slug"])),
+    )
+    return bool(view.get("configured"))
 
 
 async def _refresh_client_projections(slug: str) -> bool | None | Literal["composition_refused"]:

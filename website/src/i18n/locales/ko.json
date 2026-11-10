@@ -14480,7 +14480,8 @@
       "prerequisite_google_calendar": "Google은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Google OAuth 앱을(를) 사용합니다. Google 동의 화면에는 그 앱 이름이 표시됩니다. 승인하면 계속 진행됩니다.",
       "prerequisite_google_sheets": "Google은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Google OAuth 앱을(를) 사용합니다. Google 동의 화면에는 그 앱 이름이 표시됩니다. 승인하면 계속 진행됩니다.",
       "prerequisite_google_docs": "Google은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Google OAuth 앱을(를) 사용합니다. Google 동의 화면에는 그 앱 이름이 표시됩니다. 승인하면 계속 진행됩니다.",
-      "prerequisite_google_slides": "Google은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Google OAuth 앱을(를) 사용합니다. Google 동의 화면에는 그 앱 이름이 표시됩니다. 승인하면 계속 진행됩니다."
+      "prerequisite_google_slides": "Google은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Google OAuth 앱을(를) 사용합니다. Google 동의 화면에는 그 앱 이름이 표시됩니다. 승인하면 계속 진행됩니다.",
+      "prerequisite_slack": "Slack은(는) 동적 클라이언트 등록을 지원하지 않으므로 연결은 설정 → OAuth 앱에 등록한 Slack 앱을(를) 사용합니다. 그 앱에서 PKCE와 Slack MCP 서버를 켜 두어야 합니다. Slack 동의 화면에는 그 앱 이름이 표시됩니다."
     },
     "contextBreakdown": {
       "axis_turn_n": "{{n}}번째 턴",

@@ -2,10 +2,9 @@
 
 *Who this is for: the person who owns (or can create apps in) the Slack workspace that Kiro Crew should read. You need a browser and a Slack account with permission to install apps in that workspace. Expected time: 20 minutes, plus any wait for a workspace admin to approve the app.*
 
-**Slack has no Connections entry yet** — see the
-[index](README.md) for the providers pre-registered on this build — so its card
-and its **Connect** button appear once that entry ships. Registering the redirect
-URI below now means it already matches when it does.
+Slack is a pre-registered Connections entry (see the [index](README.md)): its
+card reads "needs configuration" until the Client ID from section 5 is saved, and
+offers **Connect** after.
 
 This runbook covers the **Slack MCP server** (`https://mcp.slack.com/mcp`), which lets Kiro Crew search and read Slack on behalf of the signed-in user. It is not the Slack channel bot described in `docs/guides/slack-setup.md`; that is a separate feature with separate tokens. You can reuse one Slack app for both, but this document only covers the MCP side.
 
@@ -50,7 +49,7 @@ Kiro Crew registers this provider's callback on the host name `localhost` becaus
 
 Slack also documents confidential OAuth for MCP clients ("Slack supports confidential OAuth for MCP clients. You'll need to use your app's `client_id` and `client_secret`"), but a confidential client would need an https redirect, which Kiro Crew's loopback listener cannot serve. The PKCE + `localhost` route is the documented alternative.
 
-Kiro Crew's OAuth callback listener runs inside kiro-cli on the loopback interface over plain HTTP only; an https loopback is not possible, and the port is fixed per provider (Slack is 48106). Remote, tailnet or Docker installs do not need a second redirect URI. After you approve the app, the browser is sent to that loopback URL, which is unreachable from your laptop when the gateway runs elsewhere; copy the full landing URL from the browser's address bar, paste it into the Kiro Crew dashboard when prompted, and the gateway replays it to its own loopback listener.
+Kiro Crew's OAuth callback listener (the gateway's own when the Crew-owned sign-in preview is on, otherwise kiro-cli's) runs on the loopback interface over plain HTTP only; an https loopback is not possible, and the port is fixed per provider (Slack is 48106). Remote, tailnet or Docker installs do not need a second redirect URI. After you approve the app, the browser is sent to that loopback URL, which is unreachable from your laptop when the gateway runs elsewhere; copy the full landing URL from the browser's address bar, paste it into the Kiro Crew dashboard when prompted, and the gateway replays it to its own loopback listener.
 
 ## 3. Scopes and permissions
 

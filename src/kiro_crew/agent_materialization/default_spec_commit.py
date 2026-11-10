@@ -20,7 +20,9 @@ from kiro_crew.mcp_cleanup import prune_dangling_tool_refs
 from kiro_crew.mcp_utils import mcp_server_alias
 
 
-def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> dict:
+def _apply_operator_oauth_client(
+    name: str, entry: dict, *, managed: bool, raw_scopes: tuple[dict, ...] = ()
+) -> dict:
     """Bind the operator's pre-registered OAuth client to a Connections server.
 
     ``managed`` is whether the dashboard store owns this name (the caller's
@@ -34,8 +36,9 @@ def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> di
 
     For a managed server, a no-op unless it is a registry provider in
     ``auth.mode = "preregistered"`` at the registry's own URL; for such a
-    provider the operator has not configured yet the entry is emitted with the
-    three owned keys removed (a cleared client must not survive the merge onto
+    confidential provider the operator has not configured yet the entry is
+    emitted with the three owned keys removed (a public one loses only the
+    secret, see below) (a cleared client must not survive the merge onto
     the previous spec) and kiro-cli's own DCR attempt fails against the vendor
     exactly as it would today, while the card already says why. When configured,
     the client id, the secret (confidential clients) and the pinned redirect URI
@@ -43,6 +46,12 @@ def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> di
     ``kiro_crew.connections.oauth_clients`` for the custody argument, in short:
     the vault is the source of truth and this file is a projection of it, the
     same footing ``headers`` secrets already have here.
+
+    ``raw_scopes`` are the raw ``mcpServers`` maps the rebuild read, in priority
+    order. A public provider's (Slack's) strip keeps the client the user wrote in
+    one of them (``oauth_clients.user_oauth_client``: id, redirect and any secret,
+    as written), never one read off the previous render, which may be the
+    operator's.
 
     Function-local imports: the connections package is otherwise off the agent
     module's import path, and the vault is only opened when a provider actually
@@ -58,6 +67,7 @@ def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> di
         provider_for_server,
         resolve_oauth_client,
         strip_preregistered_oauth_client,
+        user_oauth_client,
     )
 
     provider = provider_for_server(name, entry)
@@ -71,14 +81,18 @@ def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> di
         # managed name is not this module's business.
         named = get_provider(name)
         if named is not None and is_preregistered(named):
-            return strip_preregistered_oauth_client(entry)
+            mine = user_oauth_client(named, name, entry.get("url"), raw_scopes)
+            return strip_preregistered_oauth_client(entry, user_oauth=mine)
         return entry
     from kiro_crew.connections import crew_oauth
 
+    mine = user_oauth_client(provider, name, entry.get("url"), raw_scopes)
     if crew_oauth.strips_spec_secret(str(provider["slug"])):
         # Crew signs in with the vault's copy and no kiro-cli session reads the
-        # oauth block, so the plaintext secret here would be read by nobody.
-        return strip_preregistered_oauth_client(entry)
+        # oauth block, so the plaintext secret here would be read by nobody. A
+        # public client's id is the user's and not a secret: it stays, and
+        # Crew's own sign-in reads it back (``crew_oauth.server_oauth_hints``).
+        return strip_preregistered_oauth_client(entry, user_oauth=mine)
     from kiro_crew.secrets import SecretVault
 
     resolved = resolve_oauth_client(
@@ -87,12 +101,16 @@ def _apply_operator_oauth_client(name: str, entry: dict, *, managed: bool) -> di
         vault=SecretVault(config_dir()),
     )
     if resolved is None:
+        # A public PKCE client (Slack) keeps the client the user wrote in a raw
+        # scope, whole: a user who signed in with it on kiro-cli before the
+        # provider joined the registry keeps that sign-in.
+        #
         # The rebuild merges onto the PREVIOUS installed spec, so a client the
         # operator cleared would otherwise survive there verbatim -- a retired
         # secret still presented at the token endpoint and still readable in
         # the file. For a pre-registered provider the operator's record is the
         # only source of these three keys, so absence means removal.
-        return strip_preregistered_oauth_client(entry)
+        return strip_preregistered_oauth_client(entry, user_oauth=mine)
     return apply_preregistered_oauth_client(entry, resolved)
 
 
@@ -131,6 +149,8 @@ def write_default_spec(
         _read_mcp_json_unlocked,
     )
 
+    _raw_scopes = tuple(scope for _label, scope in sources.scopes)
+
     def _finalize_and_write() -> None:
         servers_map = config.get("mcpServers")
         if isinstance(servers_map, dict):
@@ -148,7 +168,7 @@ def write_default_spec(
                 _entry = servers_map.get(_oauth_name)
                 if isinstance(_entry, dict):
                     servers_map[_oauth_name] = _apply_operator_oauth_client(
-                        _oauth_name, _entry, managed=_managed
+                        _oauth_name, _entry, managed=_managed, raw_scopes=_raw_scopes
                     )
         # Reconcile the ref lists against the FINAL server map, at the one funnel
         # every write goes through. Placed here because the map is only final now:

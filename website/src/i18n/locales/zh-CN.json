@@ -14480,7 +14480,8 @@
       "prerequisite_google_calendar": "Google 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Google OAuth 应用。Google 授权页面显示的是此应用；同意后即可继续。",
       "prerequisite_google_sheets": "Google 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Google OAuth 应用。Google 授权页面显示的是此应用；同意后即可继续。",
       "prerequisite_google_docs": "Google 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Google OAuth 应用。Google 授权页面显示的是此应用；同意后即可继续。",
-      "prerequisite_google_slides": "Google 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Google OAuth 应用。Google 授权页面显示的是此应用；同意后即可继续。"
+      "prerequisite_google_slides": "Google 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Google OAuth 应用。Google 授权页面显示的是此应用；同意后即可继续。",
+      "prerequisite_slack": "Slack 不支持动态客户端注册，因此“连接”会使用在设置 → OAuth 应用中注册的 Slack 应用。该应用必须开启 PKCE 并启用 Slack MCP 服务器；Slack 授权页面显示的是此应用。"
     },
     "contextBreakdown": {
       "axis_turn_n": "第 {{n}} 轮",

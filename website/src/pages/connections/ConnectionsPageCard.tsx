@@ -150,6 +150,7 @@ const PREREQUISITE_KEYS = {
   'google-sheets': 'pages.connectionsPage.prerequisite_google_sheets',
   'google-docs': 'pages.connectionsPage.prerequisite_google_docs',
   'google-slides': 'pages.connectionsPage.prerequisite_google_slides',
+  slack: 'pages.connectionsPage.prerequisite_slack',
 } as const
 
 /**

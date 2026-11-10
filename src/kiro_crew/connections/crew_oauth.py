@@ -6,8 +6,8 @@ The gateway runs the OAuth chain itself instead of handing it to the harness
 * :class:`SignIn` builds the consent URL (PKCE S256 + ``state``) and holds a
   one-shot callback listener on the provider's registered loopback port. The
   verifier lives in memory only.
-* the code is swapped for tokens with the operator's ``client_secret``; the pair
-  is stored in the user vault (:class:`TokenStore`), never in config, a spec, a
+* the code is swapped for tokens with the operator's ``client_secret`` (a public
+  PKCE client such as Slack's sends none); the pair is stored in the user vault (:class:`TokenStore`), never in config, a spec, a
   transcript, a log or the sandbox.
 * :func:`access_token` refreshes before expiry with a single-flight lock per
   connection. GitHub refresh tokens are single-use, so the new pair is committed
@@ -81,6 +81,24 @@ _ENDPOINTS: dict[str, dict[str, Any]] = {
         "revoke": "https://app.asana.com/-/oauth_revoke",
         "revoke_form": ("token", "client_id", "client_secret"),
     },
+    # Slack's MCP authorization server (https://mcp.slack.com/.well-known/
+    # oauth-authorization-server): user-token consent and token endpoints,
+    # client_secret_post, PKCE S256. A public PKCE client sends no secret
+    # (docs.slack.dev/authentication/using-pkce); refresh tokens rotate and are
+    # single-use (docs.slack.dev/authentication/using-token-rotation).
+    "slack": {
+        "authorize": "https://slack.com/oauth/v2_user/authorize",
+        "token": "https://slack.com/api/oauth.v2.user.access",
+        # Revokes one token, the access token (docs.slack.dev/reference/methods/
+        # auth.revoke); Slack answers 200 and reports the outcome in the body.
+        # shortcut: no Slack endpoint revokes a refresh token, so the rotating
+        # refresh token stays live upstream until its 30-day expiry; the card's
+        # revoke page ends the whole grant.
+        "revoke": "https://slack.com/api/auth.revoke",
+        "revoke_form": ("token",),
+        "revoke_token": "access",
+        "revoke_ok_field": "revoked",
+    },
     **{
         slug: _GOOGLE
         for slug in (
@@ -101,7 +119,9 @@ _REFRESH_SKEW_SECS = 120.0
 SIGN_IN_TTL_SECS = 600.0
 _HTTP_TIMEOUT_SECS = 20.0
 #: Refresh errors that mean the stored refresh token is dead (after one re-read).
-_DEAD_GRANT_ERRORS = frozenset({"bad_refresh_token", "invalid_grant", "unauthorized_client"})
+_DEAD_GRANT_ERRORS = frozenset(
+    {"bad_refresh_token", "invalid_grant", "invalid_refresh_token", "unauthorized_client"}
+)
 
 _refresh_locks: dict[str, asyncio.Lock] = {}
 _startup_locks: dict[str, asyncio.Lock] = {}
@@ -419,7 +439,11 @@ class TokenStore:
 
 
 def _client(slug: str) -> Any:
-    """The operator's resolved client (id + secret), or ``client_not_configured``."""
+    """The operator's resolved client, or ``client_not_configured``.
+
+    A confidential client resolves only with its secret; a public PKCE client
+    (registry ``auth.confidential`` false, Slack) resolves without one.
+    """
     from kiro_crew.config.loader import read_config_for_update
     from kiro_crew.config.paths import config_dir
     from kiro_crew.connections.oauth_clients import resolve_oauth_client
@@ -434,9 +458,60 @@ def _client(slug: str) -> Any:
         if provider is not None
         else None
     )
-    if resolved is None or not resolved.client_secret:
+    confidential = bool(provider and provider["auth"].get("confidential"))
+    if resolved is None and provider is not None and not confidential:
+        from kiro_crew.connections.oauth_clients import ResolvedOAuthClient
+        from kiro_crew.connections.registry import redirect_uri
+
+        client_id, _ = server_oauth_hints(slug)
+        uri = redirect_uri(provider)
+        if client_id and uri:
+            resolved = ResolvedOAuthClient(slug, client_id, "server", None, None, uri)
+    if resolved is None or (confidential and not resolved.client_secret):
         raise CrewOAuthError("client_not_configured")
     return resolved
+
+
+def server_oauth_hints(slug: str) -> tuple[str, tuple[str, ...]]:
+    """The client id and scopes on the user's own *slug* entry, for a public client. Blocking.
+
+    Only a public pre-registered provider (Slack) at the registry's own URL: its
+    client id is public and the user may have set it on the entry before the card
+    existed. Read only; the entry is never edited. ``("", ())`` otherwise.
+    """
+    from kiro_crew.connections.oauth_clients import validate_client_id
+    from kiro_crew.connections.registry import get_provider, is_preregistered
+    from kiro_crew.mcp_discovery import list_servers
+
+    provider = get_provider(slug)
+    if provider is None or not is_preregistered(provider) or provider["auth"].get("confidential"):
+        return "", ()
+    try:
+        servers = list_servers()
+    except Exception:  # noqa: BLE001 -- unreadable config: no hint
+        return "", ()
+    for server in servers:
+        if server.name == slug and server.url == provider["mcp_url"]:
+            return validate_client_id(server.client_id) or "", tuple(server.scopes or ())
+    return "", ()
+
+
+def server_client_id(slug: str) -> str | None:
+    """:func:`server_oauth_hints`'s client id, or ``None``. Blocking.
+
+    The Connections card and the mint gate read it whether or not the preview is
+    on: with it off, Connect runs through kiro-cli, whose rendered entry keeps the
+    same client id (``default_spec_commit._apply_operator_oauth_client``).
+    """
+    return server_oauth_hints(slug)[0] or None
+
+
+def _client_form(client: Any) -> dict[str, str]:
+    """The client fields of a token request: the id, and the secret when there is one."""
+    form = {"client_id": client.client_id}
+    if client.client_secret:
+        form["client_secret"] = client.client_secret
+    return form
 
 
 async def _post_token(slug: str, form: dict[str, str]) -> dict[str, Any]:
@@ -475,11 +550,19 @@ async def _post_token(slug: str, form: dict[str, str]) -> dict[str, Any]:
     return doc
 
 
-def authorize_url(slug: str, client_id: str, redirect: str, state: str, challenge: str) -> str:
+def authorize_url(
+    slug: str,
+    client_id: str,
+    redirect: str,
+    state: str,
+    challenge: str,
+    scopes: tuple[str, ...] = (),
+) -> str:
+    """The consent URL; *scopes* (the user's own entry's) replace the registry's."""
     from kiro_crew.connections.registry import get_provider
 
     provider = get_provider(slug)
-    scopes = (provider.get("recommended_scopes") if provider else None) or []
+    requested = list(scopes) or (provider.get("recommended_scopes") if provider else None) or []
     query = {
         "response_type": "code",
         "client_id": client_id,
@@ -488,9 +571,9 @@ def authorize_url(slug: str, client_id: str, redirect: str, state: str, challeng
         "code_challenge": challenge,
         "code_challenge_method": "S256",
     }
-    scopes = [*scopes, *_ENDPOINTS[slug].get("extra_scopes", ())]
-    if scopes:
-        query["scope"] = " ".join(str(s) for s in scopes)
+    requested = [*requested, *_ENDPOINTS[slug].get("extra_scopes", ())]
+    if requested:
+        query["scope"] = " ".join(str(s) for s in requested)
     query.update(_ENDPOINTS[slug].get("authorize_params", {}))
     return f"{_ENDPOINTS[slug]['authorize']}?{urllib.parse.urlencode(query)}"
 
@@ -523,6 +606,7 @@ class SignIn:
         self._write: asyncio.Future[None] | None = None
         self._dcr: Any = None
         self._listening = False
+        self._scopes: tuple[str, ...] = ()
 
     async def start(self) -> str:
         """Bind the callback listener and return the consent URL."""
@@ -548,6 +632,7 @@ class SignIn:
             return self.url
         provider = get_provider(self.slug)
         client = await asyncio.to_thread(_client, self.slug)
+        _, self._scopes = await asyncio.to_thread(server_oauth_hints, self.slug)
         redirect = redirect_uri(provider) if provider else None
         if not redirect:
             raise CrewOAuthError("client_not_configured")
@@ -569,7 +654,7 @@ class SignIn:
         self._client = client
         self._redirect = redirect
         self.url = authorize_url(
-            self.slug, client.client_id, redirect, self._state, self._challenge
+            self.slug, client.client_id, redirect, self._state, self._challenge, self._scopes
         )
         return self.url
 
@@ -622,8 +707,7 @@ class SignIn:
                         self.slug,
                         {
                             "grant_type": "authorization_code",
-                            "client_id": self._client.client_id,
-                            "client_secret": self._client.client_secret,
+                            **_client_form(self._client),
                             "code": code,
                             "redirect_uri": self._redirect,
                             "code_verifier": self._verifier,
@@ -694,8 +778,7 @@ async def _refresh(slug: str, store: TokenStore, held: tuple[Tokens, str]) -> To
                 {
                     "grant_type": "refresh_token",
                     "refresh_token": tokens.refresh,
-                    "client_id": client.client_id,
-                    "client_secret": client.client_secret,
+                    **_client_form(client),
                 },
             )
         fresh = tokens_from_response(doc, time.time())
@@ -819,16 +902,26 @@ async def _revoke(slug: str, tokens: Tokens) -> bool:
             else None
         )
         if form_fields:
-            values = {"token": tokens.refresh or tokens.access}
+            endpoint = _ENDPOINTS[slug]
+            token = tokens.access if endpoint.get("revoke_token") == "access" else None
+            values = {"token": token or tokens.refresh or tokens.access}
             if client is not None:
                 values.update(client_id=client.client_id, client_secret=client.client_secret)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(
-                    _ENDPOINTS[slug]["revoke"],
+                    endpoint["revoke"],
                     data={k: values[k] for k in form_fields},
                     allow_redirects=False,
                 ) as resp:
-                    return resp.status == 200
+                    ok_field = endpoint.get("revoke_ok_field")
+                    if resp.status != 200 or not ok_field:
+                        return resp.status == 200
+                    # A 200 that still says no (Slack's ``{"ok": false}``) is no revoke.
+                    try:
+                        body = await resp.json(content_type=None)
+                    except ValueError:
+                        return False
+                    return isinstance(body, dict) and body.get(ok_field) is True
         auth = aiohttp.BasicAuth(client.client_id, client.client_secret)
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.delete(
@@ -950,7 +1043,9 @@ async def _start_mint_row(slug: str, project_dirs: Any) -> str:
 
         vetted = dcr_authorize_url(sign_in._dcr, fixed, fixed)
     else:
-        vetted = authorize_url(slug, sign_in._client.client_id, sign_in._redirect, fixed, fixed)
+        vetted = authorize_url(
+            slug, sign_in._client.client_id, sign_in._redirect, fixed, fixed, sign_in._scopes
+        )
     if await asyncio.to_thread(oauth_url_contains_credential, vetted):
         await sign_in.shutdown()
         await _set_row(slug, token, {"state": "failed", "reason": "mint_url_rejected"})

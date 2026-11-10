@@ -157,6 +157,7 @@ def _client_config_map(providers: list[Provider]) -> dict[str, bool]:
     """
     from kiro_crew.config import config_dir
     from kiro_crew.config.loader import read_config_for_update
+    from kiro_crew.connections import crew_oauth
     from kiro_crew.connections.oauth_clients import oauth_client_view
     from kiro_crew.secrets import SecretVault
 
@@ -173,7 +174,12 @@ def _client_config_map(providers: list[Provider]) -> dict[str, bool]:
         names = set()
     return {
         str(p["slug"]): bool(
-            oauth_client_view(p, config=config, vault_names=names).get("configured")
+            oauth_client_view(
+                p,
+                config=config,
+                vault_names=names,
+                server_client_id=crew_oauth.server_client_id(str(p["slug"])),
+            ).get("configured")
         )
         for p in pending
     }

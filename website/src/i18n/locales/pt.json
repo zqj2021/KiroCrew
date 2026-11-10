@@ -15228,7 +15228,8 @@
       "prerequisite_google_calendar": "Google não oferece registro dinâmico de clientes, então Conectar usa o app OAuth do Google registrado em Configurações → Apps OAuth. A página de consentimento do Google mostra esse app; aprove-o para continuar.",
       "prerequisite_google_sheets": "Google não oferece registro dinâmico de clientes, então Conectar usa o app OAuth do Google registrado em Configurações → Apps OAuth. A página de consentimento do Google mostra esse app; aprove-o para continuar.",
       "prerequisite_google_docs": "Google não oferece registro dinâmico de clientes, então Conectar usa o app OAuth do Google registrado em Configurações → Apps OAuth. A página de consentimento do Google mostra esse app; aprove-o para continuar.",
-      "prerequisite_google_slides": "Google não oferece registro dinâmico de clientes, então Conectar usa o app OAuth do Google registrado em Configurações → Apps OAuth. A página de consentimento do Google mostra esse app; aprove-o para continuar."
+      "prerequisite_google_slides": "Google não oferece registro dinâmico de clientes, então Conectar usa o app OAuth do Google registrado em Configurações → Apps OAuth. A página de consentimento do Google mostra esse app; aprove-o para continuar.",
+      "prerequisite_slack": "Slack não oferece registro dinâmico de clientes, então Conectar usa o app do Slack registrado em Configurações → Apps OAuth. O app precisa ter o PKCE e o servidor MCP do Slack ativados; a página de consentimento do Slack mostra esse app."
     },
     "contextBreakdown": {
       "axis_turn_n": "Turno {{n}}",

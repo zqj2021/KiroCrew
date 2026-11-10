@@ -7058,7 +7058,8 @@
       "prerequisite_google_calendar": "Google does not support dynamic client registration, so Connect uses the Google OAuth App registered under Settings → OAuth Apps. The Google consent page names that app; approve it to continue.",
       "prerequisite_google_sheets": "Google does not support dynamic client registration, so Connect uses the Google OAuth App registered under Settings → OAuth Apps. The Google consent page names that app; approve it to continue.",
       "prerequisite_google_docs": "Google does not support dynamic client registration, so Connect uses the Google OAuth App registered under Settings → OAuth Apps. The Google consent page names that app; approve it to continue.",
-      "prerequisite_google_slides": "Google does not support dynamic client registration, so Connect uses the Google OAuth App registered under Settings → OAuth Apps. The Google consent page names that app; approve it to continue."
+      "prerequisite_google_slides": "Google does not support dynamic client registration, so Connect uses the Google OAuth App registered under Settings → OAuth Apps. The Google consent page names that app; approve it to continue.",
+      "prerequisite_slack": "Slack does not support dynamic client registration, so Connect uses the Slack app registered under Settings → OAuth Apps. The app must have PKCE turned on and the Slack MCP server enabled; the Slack consent page names that app."
     },
     "crewBoard": {
       "title": "Work items",

@@ -75,7 +75,7 @@ export interface ConnectionStatus {
 }
 
 /** Where a client-record half came from; `null` means not set anywhere. */
-export type ConnectionOAuthClientSource = 'env' | 'config' | 'vault' | 'registry'
+export type ConnectionOAuthClientSource = 'env' | 'config' | 'vault' | 'registry' | 'server'
 
 /** One pre-registered provider's operator OAuth client, as GET /api/connections/oauth-clients
  *  reports it. Carries the PUBLIC client id and only a boolean for the secret. */

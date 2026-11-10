@@ -49,7 +49,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, TypedDict
+from typing import Any, Iterable, Literal, Mapping, TypedDict
 
 from kiro_crew.connections.registry import (
     Provider,
@@ -58,7 +58,7 @@ from kiro_crew.connections.registry import (
     is_preregistered,
     redirect_uri,
 )
-from kiro_crew.mcp_utils import KIRO_OAUTH_KEY
+from kiro_crew.mcp_utils import KIRO_OAUTH_KEY, kiro_entry_client_id
 
 #: Root of the public client-id records in ``config.json``.
 CONFIG_ROOT_KEY = "connections"
@@ -72,7 +72,9 @@ _SECRET_NAME_SUFFIX = "_CLIENT_SECRET"
 _CLIENT_ID_PATTERN = re.compile(r"^[\x21-\x7e]{1,512}$")
 _CLIENT_SECRET_MAX_LEN = 4096
 
-Source = Literal["env", "config", "vault", "registry"]
+#: ``server``: the public client id the user already set on their own MCP entry
+#: for a public provider (``oauth.clientId``), read but never written.
+Source = Literal["env", "config", "vault", "registry", "server"]
 
 
 def _slug_token(slug: str) -> str:
@@ -271,6 +273,7 @@ def oauth_client_view(
     config: Mapping[str, Any] | None,
     vault_names: set[str] | frozenset[str],
     environ: Mapping[str, str] | None = None,
+    server_client_id: str | None = None,
 ) -> OAuthClientView:
     """The dashboard-facing record for ``provider``; carries no secret value.
 
@@ -304,6 +307,10 @@ def oauth_client_view(
             from_registry = validate_client_id(provider.get("client_id"))
             if from_registry:
                 view["client_id"], view["client_id_source"] = from_registry, "registry"
+    from_server = validate_client_id(server_client_id)
+    if view["client_id"] is None and from_server and not view["confidential"]:
+        # Last: the id on the user's own entry for a public provider.
+        view["client_id"], view["client_id_source"] = from_server, "server"
 
     if validate_client_secret(env.get(client_secret_env_name(slug))):
         view["client_secret_set"], view["client_secret_source"] = True, "env"
@@ -342,7 +349,13 @@ def apply_preregistered_oauth_client(
     return out
 
 
-def strip_preregistered_oauth_client(entry: dict[str, Any]) -> dict[str, Any]:
+#: The ``oauth`` keys this module owns on a pre-registered provider's entry.
+_OWNED_OAUTH_KEYS = ("clientId", "clientSecret", "redirectUri")
+
+
+def strip_preregistered_oauth_client(
+    entry: dict[str, Any], *, user_oauth: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     """Remove the three ``oauth`` keys this module owns from a remote MCP entry.
 
     The inverse of :func:`apply_preregistered_oauth_client`, for a pre-registered
@@ -351,20 +364,58 @@ def strip_preregistered_oauth_client(entry: dict[str, Any]) -> dict[str, Any]:
     survive there -- its retired secret still presented at the token endpoint
     and still readable in the file. Sibling ``oauth`` sub-keys survive; the
     mapping is dropped once nothing is left in it.
+
+    ``user_oauth`` is the user's own client, as they wrote it on their entry in a
+    raw ``mcp.json`` scope (:func:`user_oauth_client`), never read off a rendered
+    spec: it is put back whole after the strip, so a projected operator client
+    goes and the user's own survives unchanged.
     """
 
     out = dict(entry)
     raw_oauth = out.get(KIRO_OAUTH_KEY)
-    if not isinstance(raw_oauth, dict):
-        return out
-    oauth = dict(raw_oauth)
-    for key in ("clientId", "clientSecret", "redirectUri"):
+    oauth = dict(raw_oauth) if isinstance(raw_oauth, dict) else {}
+    for key in _OWNED_OAUTH_KEYS:
         oauth.pop(key, None)
+    oauth.update(user_oauth or {})
     if oauth:
         out[KIRO_OAUTH_KEY] = oauth
     else:
         out.pop(KIRO_OAUTH_KEY, None)
     return out
+
+
+def user_oauth_client(
+    provider: Provider | None, name: str, url: object, scopes: Iterable[object]
+) -> dict[str, str]:
+    """The user's own client keys on ``name`` at ``url`` in a raw scope; ``{}`` if none.
+
+    Only for a PUBLIC pre-registered provider (``auth.confidential`` false,
+    Slack), which has no DCR: a user who used it before it joined the registry
+    set their own ``clientId`` (and maybe ``redirectUri`` and ``clientSecret``)
+    on their entry, and that entry is theirs, so all of it is kept. ``scopes`` are
+    raw ``mcpServers`` maps in priority order; the first that names a usable
+    client id wins, and its owned keys are returned as written. A rendered agent
+    spec is never one of them: it is a projection that may hold the operator's.
+    """
+
+    if provider is None or provider.get("auth", {}).get("confidential", True):
+        return {}
+    for scope in scopes:
+        entry = scope.get(name) if isinstance(scope, Mapping) else None
+        if not isinstance(entry, Mapping) or entry.get("url") != url:
+            continue
+        client_id = validate_client_id(kiro_entry_client_id(dict(entry)))
+        if not client_id:
+            continue
+        oauth = entry.get(KIRO_OAUTH_KEY)
+        kept = {
+            k: v
+            for k, v in (oauth.items() if isinstance(oauth, Mapping) else ())
+            if k in _OWNED_OAUTH_KEYS and isinstance(v, str) and v
+        }
+        kept["clientId"] = client_id
+        return kept
+    return {}
 
 
 def provider_for_server(name: str, entry: Mapping[str, Any] | None) -> Provider | None:

@@ -139,7 +139,7 @@ BASE_SURFACE: dict[str, str] = {
     "_app_owned_mcp_keys": "callable _app_owned_mcp_keys() -> 'dict[str, bool]'",
     "_apply_allowed_tools_ceiling": "callable _apply_allowed_tools_ceiling(config: 'dict', *, source: 'str', audit: 'bool' = True) -> 'None'",
     "_apply_connection_tool_aliases": "callable _apply_connection_tool_aliases(config: 'dict', claimed: 'frozenset[tuple[str, str, str]]' = frozenset()) -> 'tuple[str, frozenset[tuple[str, str, str]]] | None'",
-    "_apply_operator_oauth_client": "callable _apply_operator_oauth_client(name: 'str', entry: 'dict', *, managed: 'bool') -> 'dict'",
+    "_apply_operator_oauth_client": "callable _apply_operator_oauth_client(name: 'str', entry: 'dict', *, managed: 'bool', raw_scopes: 'tuple[dict, ...]' = ()) -> 'dict'",
     "_apply_user_kiro_hooks": "callable _apply_user_kiro_hooks(config: 'dict', mc_cfg: 'dict') -> 'None'",
     "_apply_worker_exclusions": "callable _apply_worker_exclusions(granted: 'list[str]', *, template_grants: 'list[str]') -> 'list[str]'",
     "_atomic_json_write": "callable _atomic_json_write(path: 'Path', data: 'dict') -> 'None'",

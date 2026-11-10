@@ -119,7 +119,13 @@ async def test_get_lists_every_preregistered_provider_unconfigured(home):
         ("google-docs", 48110),
         ("google-slides", 48111),
     )
-    assert set(by_slug) == {slug for slug, _ in shipped}
+    # Slack is a public PKCE client on a localhost redirect.
+    assert set(by_slug) == {slug for slug, _ in shipped} | {"slack"}
+    slack = by_slug["slack"]
+    assert slack["configured"] is False and slack["confidential"] is False
+    assert slack["redirect_uri"] == "http://localhost:48106/callback"
+    assert slack["registration_guide"] == "oauth-app-registration/slack.md"
+    assert "client_secret" not in slack
     for slug, port in shipped:
         record = by_slug[slug]
         assert record["configured"] is False
