@@ -1532,6 +1532,11 @@ def spec_keys_notice(agent: str, keys: list[str]) -> str:
             f" An allow rule whose exclude list has more than {allow_exclude_limit()} "
             "patterns is not sent, so what it allows asks for approval."
         )
+    if any(".deniedCommands: " in key for key in keys):
+        notice += (
+            " Kiro Crew does not check those deniedCommands entries, so a command only they "
+            "name is not refused on this backend. Its other deniedCommands entries still apply."
+        )
     if unread:
         notice += f" {entries}"
     return notice
