@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import unicodedata
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
-from .store import MAX_ENTITY_ALIAS_LEN
+from .store import MAX_ENTITY_ALIAS_LEN, MAX_ENTITY_ALIASES
 
 if TYPE_CHECKING:
     from .store import KnowledgeStore
+
+logger = logging.getLogger(__name__)
 
 # Short Latin names deliberately lose automatic alias merging: spelling alone
 # cannot distinguish a real short name from an abbreviation such as CR or BTS.
@@ -119,3 +123,52 @@ def resolve_entity(
         # incoming name already appears in that entity's persisted aliases.
         tier = min(tier or candidate_tier, candidate_tier)
     return resolved, tier
+
+
+def merge_split_entities(store: KnowledgeStore) -> int:
+    """Merge entity pairs an alias bridge now joins; return how many were merged.
+
+    Libraries ingested before aliases were stored hold one real-world entity as
+    two nodes; the pair appears once a later ingest attaches the alias to one of
+    them. A pair qualifies under the ingestion rule: one entity's stored alias is
+    the other's canonical name (``split_entity_candidates``), the types agree and
+    ``alias_merge_allowed`` holds; alias-to-alias overlap never pairs. Each of the
+    two must have no other such partner, in either direction, so an ambiguous or
+    chained group stays as it is. An entity storing ``MAX_ENTITY_ALIASES``
+    aliases counts as a partner but never merges: as with ingestion's overflow
+    rule, the cap may have dropped an alias naming a third entity. The entity
+    carrying the alias is kept and takes the other's mentions and relations; the
+    other's aliases go with its row, as ingestion never carries aliases through
+    a bridge. Run inside the store's ``maintenance_window``, so no ingest or
+    bundle import writes an entity, alias or mention meanwhile.
+    """
+    pairs = []
+    partners: dict[str, set[str]] = defaultdict(set)
+    capped: set[str] = set()
+    for keeper, target, bridge in store.split_entity_candidates():
+        if (keeper["entity_type"] or "concept") != (target["entity_type"] or "concept"):
+            continue
+        if not alias_merge_allowed(keeper["name"], target["name"], bridge):
+            continue
+        pairs.append((keeper["id"], target["id"]))
+        partners[keeper["id"]].add(target["id"])
+        partners[target["id"]].add(keeper["id"])
+        capped.update(e["id"] for e in (keeper, target) if len(e["aliases"]) >= MAX_ENTITY_ALIASES)
+    handled: set[str] = set()
+    merged = 0
+    for keep_id, target_id in pairs:
+        # A mutual pair is listed twice; the keeper with the older row wins.
+        if keep_id in handled or partners[keep_id] != {target_id}:
+            continue
+        if partners[target_id] != {keep_id} or {keep_id, target_id} & capped:
+            continue
+        handled |= {keep_id, target_id}
+        try:
+            store.merge_entities(keep_id, target_id)
+        except Exception:  # noqa: BLE001 -- one pair must not stop the others
+            logger.warning("Split entity merge skipped for %s", target_id, exc_info=True)
+            continue
+        merged += 1
+    if merged:
+        logger.info("Merged %d split entity pair(s)", merged)
+    return merged
