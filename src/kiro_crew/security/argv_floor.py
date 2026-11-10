@@ -237,6 +237,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _brace_alternatives,
         _brace_expansions,
         _command_value_names_self_endpoint,
+        _executed_program_indices,
         _function_call_binds_self,
         _glob_can_name_ssh_verb,
         _is_ssh_to_self,
@@ -253,10 +254,9 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
     )
 if TYPE_CHECKING:  # names it serves from outside its owners, from their homes
     from kiro_crew.atomic_write import on_event_loop as _event_loop_running  # noqa: F401
+    from kiro_crew.security import argv_rules as _argv_rules  # noqa: F401
     from kiro_crew.security import shell_normalizer as _shell_normalizer  # noqa: F401
-    from kiro_crew.security.denied_rules import (  # noqa: F401
-        _GIT_PUBLISH_UNGATED,
-    )
+    from kiro_crew.security.denied_rules import _GIT_PUBLISH_UNGATED  # noqa: F401
     from kiro_crew.security.host_addresses import (  # noqa: F401
         _darwin_interface_addresses,
         _linux_netlink_addresses,
@@ -314,7 +314,4 @@ if TYPE_CHECKING:  # names it serves from outside its owners, from their homes
         _substitution_depth_delta,
         _xargs_here_string_rebuild,
     )
-    from kiro_crew.security.vocabulary import (  # noqa: F401
-        _KILL_BY_NAME_PROGRAMS,
-        _SELF_NAME_RE,
-    )
+    from kiro_crew.security.vocabulary import _KILL_BY_NAME_PROGRAMS, _SELF_NAME_RE  # noqa: F401

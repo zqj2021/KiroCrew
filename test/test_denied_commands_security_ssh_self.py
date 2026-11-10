@@ -736,10 +736,60 @@ class TestSandboxEscapeSshSelf:
             "0 9 * * 1-5",
             "*/15 * * * *",
             "it runs on the cron schedule 0 * * * * (top of every hour).",
-            # The residual this costs: a bare glob verb and its glob host both
-            # expand in a working directory the caller filled, which already
-            # makes a lone ``*`` the whole connection.
-            "s?h local*",
+            # The residual this costs: a verb word of only ``*`` and its glob
+            # host both expand in a working directory the caller filled, which
+            # already makes a lone ``*`` the whole connection.
+            "** *",
+            # A bare glob that is a file operand of a program that reads its
+            # operands as names expands to files, not an ssh program.
+            "tar -czf handoff.tgz s* *.*",
+            "zip -r handoff.zip s* *.*",
+            "git add s* *.*",
+            'for f in s* *.*; do wc -l "$f"; done',
+            "gzip -9 s* *.1",
+            "git status --short -- r* l*",
+            "git ls-files -- '*sh' '*.*'",
+            "tar -czf sources.tgz *c 1*",
+            "dir s* *.*",
+            "dir /b r* *.*",
+            "tar.exe -czf handoff.tgz s* *.*",
+            "get-childitem -path s* *.*",
+            "attrib -r s* *.*",
+            # git and tar read their operands as repo/file names, never a
+            # program they exec, so an ssh-verb glob among them with a glob
+            # host after it is two file names, not a connection.  (git's own
+            # scp-like remote and tar's host:file transport are a separate
+            # floor gap that predates this rule: the floor models only literal
+            # ssh/scp/sftp/rsync verbs, and these forms read the same on main.)
+            "git add s?h local*",
+            "git clone s?h local*:x",
+            "git ls-remote s* local*:x",
+            "tar -czf x.tgz s?h local*",
+            "tar -cf local*:out.tar s* l*",
+            # A glob that only SITS in a program's operands is a filename, so the
+            # program that reads it is irrelevant: a command-running wrapper
+            # resolves to the real program (tar/git), and an unlisted tool reads
+            # its operands as names.  Every one of these was flagged by the scope
+            # review as a regression and must stay allowed.
+            "time tar -czf handoff.tgz s* *.*",
+            "nice -n 10 tar -czf backup.tgz s* *.*",
+            "sudo tar -czf /var/backups/handoff.tgz s* *.*",
+            "gtar -czf handoff.tgz s* *.*",
+            "sha1sum s* *.*",
+            "shasum -a 256 s* *.*",
+            "chgrp -R staff s* *.*",
+            "pre-commit run --files s* *.*",
+            "npx prettier --check s* *.*",
+            "python3 -m zipfile -c handoff.zip s* *.*",
+            'cd "$wt" && time git add s* *.*',
+            # A glob in a trailing comment is never run; a comment opens at ``#``
+            # and the words after it are not a command.
+            "tar -czf handoff.tgz src # s* *.* go in the next archive",
+            "git add -A src # s* l* stay untracked for now",
+            # A ``case`` arm pattern ``s*)`` sits in command position after ``;;``
+            # but bash never runs it as a program.
+            'case "$f" in *.md) ;; s*) wc -l *.* ;; esac',
+            'for f in *; do case "$f" in docs) ls docs ;; s*) tar -czf "$f.tgz" *.* ;; esac; done',
         ],
     )
     def test_a_glob_host_after_a_glob_verb_is_not_this_host(self, text):
@@ -767,6 +817,121 @@ class TestSandboxEscapeSshSelf:
         ],
     )
     def test_one_glob_beside_a_literal_still_names_this_host(self, cmd):
+        assert _denied_by(cmd) == self._RULE, cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # In a directory holding files named ``ssh`` and ``localhost`` (an
+            # agent can create both), the shell expands each of these into an
+            # ssh connection to this host.
+            "s?h -F /dev/null local* id",
+            "s?h local*",
+            "s?h local* id",
+            "s[s]h local* id",
+            "?sh local* id",
+            "ss* local* id",
+            "s?h -F /dev/null 127.* id",
+            "s[s]h 127.* id",
+            "?sh -F /dev/null localhos? id",
+            "s?h ::? id",
+            # A command-running wrapper EXECUTES the glob it is handed, so the
+            # self-host after it still counts (the wrapper set is the repo's own
+            # resolver, not a list in this floor).
+            "env s?h local* id",
+            "nohup s?h local* id",
+            "timeout 5 s?h -F /dev/null local* id",
+            "sudo s?h local* id",
+            "time s?h local* id",
+            "nice -n 10 s?h local* id",
+            "xargs s?h local* id",
+            "true; s?h local* id",
+        ],
+    )
+    def test_a_glob_host_after_a_bare_ssh_verb_glob_is_this_host(self, cmd):
+        assert _denied_by(cmd) == self._RULE, cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # A verb glob with a directory part expands outside the working
+            # directory, so it names the real ssh client wherever the shell
+            # runs it -- including where the execute-position walk does NOT mark
+            # it run: a ``find -exec``/``-execdir`` subcommand, behind a leading
+            # redirect, behind a tracer like ``strace``/``watch``, or behind a
+            # ``sudo -E`` the floor reads lowercased. The host glob beside it
+            # still names this host.
+            "find . -maxdepth 0 -exec /usr/bin/s?h -F /dev/null local* id \\;",
+            "find . -execdir /usr/bin/s?h local* id \\;",
+            "2>/dev/null /usr/bin/s?h local* id",
+            "> /dev/null /usr/bin/s?h local* id",
+            "strace /usr/bin/s?h local* id",
+            "watch /usr/bin/s?h local* id",
+            "sudo -E /usr/bin/s?h 127.* id",
+            # The same ``sudo -E`` with a BARE glob: the shared resolver reads
+            # ``-E`` as an option, not sudoedit, so the glob stays in program
+            # position and the host glob is read.
+            "sudo -E s?h 127.* id",
+            # Excluding array ELEMENTS from execute position does not disable the
+            # path-qualified floor: a directory-part glob inside an array with a
+            # self-host operand after it is still read as this host.
+            "arr=( /usr/bin/s?h local* )",
+        ],
+    )
+    def test_path_qualified_or_executed_glob_verb_still_names_this_host(self, cmd):
+        assert _denied_by(cmd) == self._RULE, cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # A bash array literal: ``files=(`` reads as an assignment and the
+            # glob lands in the resolver's program slot, but it is an array
+            # element bash never runs, so ``_array_element_indices`` takes it
+            # out of execute position and the glob host after it is a filename.
+            'files=( s* *.* ); printf "%s\\n" "${files[@]}"',
+            'targets=( r* l* ); tar -czf handoff.tgz "${targets[@]}"',
+            # ``declare -a``/``local -a`` prefixes do not change the reading.
+            "declare -a a=( s* *.* )",
+            "local -a a=( s* *.* )",
+            # A path part in a bare array has no self-host operand after it, so
+            # the restored floor checks it and finds nothing to match.
+            "arr=( /usr/bin/s?h )",
+        ],
+    )
+    def test_a_glob_in_an_array_literal_is_not_an_executed_verb(self, cmd):
+        assert _denied_by(cmd) is None, cmd
+
+    @pytest.mark.parametrize(
+        "cmd",
+        [
+            # A spaced, ``|``-alternated ``case`` arm: ``s*`` sits after ``;;``
+            # and is not the word ending in ``)``, so the arm guard misses it,
+            # and no existing reader tells a case pattern from a command word.
+            'for f in *; do case "$f" in docs ) ls docs ;; s* | r* ) wc -l *.* ;; esac; done',
+            # An array literal re-tokenized inside a ``bash -c`` payload: the
+            # element ``*.*`` reads as an rsync glob that the cross-frame walk
+            # carries, which the per-command array-element read does not reach.
+            "bash -c 'files=( s* *.* ); tar -czf handoff.tgz \"${files[@]}\"'",
+            # ``sudo -e``/``sudoedit`` opens files in an editor and runs no
+            # program, so the shared resolver's program slot (the glob after it)
+            # is a filename, not a verb.  The resolver reads literal ssh/scp/etc
+            # verbs the same on every floor, so the edit-mode exception is not
+            # carried there; the floor over-reads the operand instead.
+            "cd /etc/ssh && sudo -e s* *.*",
+        ],
+    )
+    def test_known_overblock_of_rare_shell_grammar_is_refused(self, cmd):
+        # KNOWN OVER-BLOCK, owner decision -- not asserting this is CORRECT.
+        # ``_executed_program_indices`` reads a glob that bash never runs as a
+        # program (a spaced/alternated ``case`` arm pattern, an array element
+        # reached only across a ``bash -c`` payload, or a ``sudo -e`` edit-mode
+        # operand), so a glob host after it is read as this host and the command
+        # is refused.  main allows all of these.  They fail SAFE (a false
+        # refusal of rare syntax, no ssh-to-self, no privilege boundary); no
+        # existing parser tells these positions from a command word, so the fix
+        # is held for an owner decision rather than chased with more argv-walk
+        # guards.  This test pins the current refusal so that fix flips it
+        # visibly.
         assert _denied_by(cmd) == self._RULE, cmd
 
     @pytest.mark.asyncio
@@ -1064,3 +1229,36 @@ class TestSandboxEscapeSshSelf:
         # textual layers decide these without it).
         assert _denied_by("ssh -- localhost") == self._RULE
         assert _denied_by("ssh -v -- 127.0.0.1 id") == self._RULE
+
+
+@pytest.mark.parametrize(
+    "tokens, executed",
+    [
+        # Program position, and nothing else.
+        (["s?h", "local*", "id"], {0}),
+        (["tar", "-czf", "x.tgz", "s*", "*.*"], {0}),
+        # A command-running wrapper resolves to the real program it runs.
+        (["env", "s?h", "local*"], {1}),
+        (["sudo", "tar", "-czf", "x", "s*"], {1}),
+        (["time", "git", "add", "s*", "*.*"], {1}),
+        (["nice", "-n", "10", "tar", "s*"], {3}),
+        (["timeout", "5", "s?h", "local*"], {2}),
+        # Two commands: each contributes its own executed program.
+        (["cd", "x", "&&", "time", "git", "add", "s*"], {0, 4}),
+        # A comment opens at '#'; its words are never a command.
+        (["tar", "-czf", "x.tgz", "src", "#", "s*", "*.*"], {0}),
+        # A case arm pattern ending in ')' in command position is not a program.
+        (["s*)", "wc", "-l", "*.*"], set()),
+        # sudo -e (sudoedit) runs no program, but the shared resolver carries no
+        # edit-mode exception, so it reads the operand after it as the program:
+        # a known over-block that fails safe (pinned above).
+        (["sudo", "-e", "s*", "*.*"], {2}),
+        # An array literal's elements are never an executed program.
+        (["files=(", "s*", "*.*", ")"], set()),
+        (["arr=(", "/usr/bin/s?h", ")"], set()),
+    ],
+)
+def test_executed_program_indices_marks_only_run_positions(tokens, executed):
+    from kiro_crew.security.argv_floor_ssh import _executed_program_indices
+
+    assert _executed_program_indices(tokens) == executed

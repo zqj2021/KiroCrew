@@ -25,6 +25,7 @@ import re
 # the reader module rather than bound here at import: the facade mirrors a patch
 # onto the owning module's namespace, so a name bound into THIS namespace would
 # keep resolving the unpatched object and the instrument would count nothing.
+from . import argv_rules as _argv_rules
 from . import shell_normalizer as _shell_normalizer
 from .argv_floor_hosts import _GLOB_CHARS, _host_is_self
 from .argv_floor_self import _self_token_frames, _static_substitution_output
@@ -124,6 +125,43 @@ _SSH_FAMILY_VERBS: frozenset[str] = frozenset({"ssh", "scp", "sftp", "rsync"})
 # IS that binary under a new name, so the walk binds it as the verb for the
 # rest of the line.
 _BINARY_COPY_VERBS: frozenset[str] = frozenset({"cp", "mv", "ln", "install"})
+
+
+def _executed_program_indices(tokens: "list[str]") -> "set[int]":
+    """Indices in *tokens* that bash runs as a PROGRAM, wrappers resolved.
+
+    A glob that can name an ssh verb (``s?h``, ``s*``) is only an ssh
+    invocation when it sits where the shell executes it: program position, or
+    the program a command-running wrapper runs (``env``/``sudo``/``time``/
+    ``nice``/``timeout``/``nohup``/``command``/``xargs`` …).  Anywhere else
+    (``tar … s* *.*``, ``find s* l*``, ``sha1sum s* *.*``) it is a filename.
+    Command boundaries (comments, separators) come from the one splitter,
+    ``argv_rules._split_commands_indexed``; the program within each command and
+    its wrapper set come from ``argv_rules._program_index`` -- neither is
+    re-derived here, so a comment, ``case`` or wrapper shape handled there needs
+    no second fix in this floor.  A word inside an array literal (``files=( s*
+    *.* )``) is an element, not a program, so the repo's own array reader
+    (``shell_normalizer._array_element_indices``) takes those positions out.
+    ``find -exec`` subcommands and a spaced/alternated ``case`` arm are the
+    documented residual: a glob verb in either is not marked executed and no
+    existing reader tells the arm pattern from a command word.
+    """
+    executed: set[int] = set()
+    array_elements = _shell_normalizer._array_element_indices(tokens)
+    for command in _argv_rules._split_commands_indexed(tokens):
+        idx = _argv_rules._program_index([word for _, word in command])
+        if idx is None:
+            continue
+        origin = command[idx][0]
+        # An array element is a filename bash never runs; the opening ``name=(``
+        # is an assignment the resolver already steps over.
+        if origin in array_elements:
+            continue
+        # A word ending in ``)`` in command position is a ``case`` arm pattern
+        # (``s*)``) or a subshell close, not a program bash runs.
+        if not command[idx][1].endswith(")"):
+            executed.add(origin)
+    return executed
 
 
 # A leading environment-assignment word (``FOO=bar cmd``) keeps the NEXT
@@ -1045,6 +1083,7 @@ def _is_ssh_to_self(text_lower: str) -> bool:
     bound_program_verbs: "dict[str, str]" = {}
     for tokens in _self_token_frames(text_lower):
         programs = _argv_programs(tokens)
+        executed = _executed_program_indices(tokens)
         # A leading ``RSYNC_RSH=<cmd>`` environment assignment selects rsync's
         # remote shell exactly like ``-e``/``--rsh``, but rides BEFORE the verb
         # so the operand walk below never sees it.  When rsync runs live, that
@@ -1081,19 +1120,26 @@ def _is_ssh_to_self(text_lower: str) -> bool:
         disqualified: "bool | None" = None
         for i, token in enumerate(tokens):
             verb = _ssh_family_verb(token)
-            # A verb read through a bare glob (``s?h``, a lone ``*``) expands only
-            # in the working directory, so it already spends the one filesystem
-            # expansion this floor models and a glob operand after it is not read
-            # as this host.  Two wildcard words in a row are every five-field cron
-            # schedule (``0 * * * *``), and a working directory that expands both
-            # into a self connection also makes a lone ``*`` that whole command
-            # line, which no static floor reads.  A verb glob with a directory part
-            # (``/usr/bin/s?h``) expands outside it, so its operands keep glob
-            # host matching.
+            # A verb glob with a directory part (``/usr/bin/s?h``) expands
+            # outside the working directory, so its operands always keep glob
+            # host matching wherever the glob sits -- including behind ``find
+            # -exec``, a redirect, ``strace`` or a lowercased ``sudo -E``, none
+            # of which mark it executed. A BARE glob (``s?h``) expands only in
+            # the working directory, so its operands are read as self-hosts
+            # only when the shell EXECUTES it as a program (``s?h local*``,
+            # ``env s?h local*``): there a caller can place an ``ssh`` file it
+            # expands to. A plain operand (``tar … s* *.*``, ``find s* l*``,
+            # ``sha1sum s* *.*``) is a filename, so matching is off. A word of
+            # only ``*`` is off wherever it sits: two in a row are a five-field
+            # cron schedule, and a lone ``*`` is a whole command line no static
+            # floor reads.
             glob_verb = (
                 verb is not None
                 and _ssh_verb_basename(token) != verb
-                and not any(sep in token for sep in "/\\")
+                and (
+                    not token.strip("*")
+                    or (not any(sep in token for sep in "/\\") and i not in executed)
+                )
             )
             if verb is None and bound_program_verbs:
                 stripped_prog = token.strip("\"'")

@@ -440,12 +440,22 @@ _ARRAY_EXPAND_RE = re.compile(r"\$\{?([A-Za-z_]\w*)\[[@*]\]\}?")
 
 
 def _array_assignments(tokens: "list[str]") -> "dict[str, str]":
-    """Literal array assignments in *tokens*, as name -> the elements joined by a space.
+    """Literal array assignments in *tokens*, as name -> the elements joined by a space."""
+    arrays: dict[str, str] = {}
+    for name, _open, _close, elements in _array_literals(tokens):
+        arrays.setdefault(name, " ".join(elements))
+    return arrays
+
+
+def _array_literals(
+    tokens: "list[str]",
+) -> "Iterator[tuple[str, int, int, list[str]]]":
+    """Each literal array assignment in *tokens*, as (name, open_index, close_index, elements).
 
     ``a=(<name> <verb>)`` tokenizes to ``['a=(<name>', '<verb>)']``, so the elements are
-    gathered from the opening token up to the one that closes the paren.
+    gathered from the opening token up to the one that closes the paren. ``open_index`` is
+    the ``name=(`` token and ``close_index`` is the token that carries the ``)``.
     """
-    arrays: dict[str, str] = {}
     i = 0
     while i < len(tokens):
         match = _ARRAY_ASSIGN_RE.match(tokens[i])
@@ -454,22 +464,35 @@ def _array_assignments(tokens: "list[str]") -> "dict[str, str]":
             continue
         name, first = match.group(1), match.group(2)
         elements: list[str] = []
-        closed = False
-        for part in [first] + tokens[i + 1 :]:
+        close: "int | None" = None
+        for offset, part in enumerate([first, *tokens[i + 1 :]]):
             # The closing paren usually arrives with the next control operator glued on
             # (``<verb>);``), so split at the paren rather than testing the token's end.
             if ")" in part:
                 stripped = part[: part.index(")")]
                 if stripped:
                     elements.append(stripped)
-                closed = True
+                close = i + offset
                 break
             if part:
                 elements.append(part)
-        if closed and elements:
-            arrays.setdefault(name, " ".join(elements))
+        if close is not None and elements:
+            yield name, i, close, elements
         i += 1
-    return arrays
+
+
+def _array_element_indices(tokens: "list[str]") -> "set[int]":
+    """Token indices that sit INSIDE a literal array assignment (``name=( … )``).
+
+    A word between the opening ``name=(`` and the closing ``)`` is an array element,
+    never a program bash runs, so a reader of execute position excludes it. The opening
+    token is an assignment and the closing ``)`` token has its own reader, so only the
+    words strictly between them are returned.
+    """
+    inside: set[int] = set()
+    for _name, open_index, close_index, _elements in _array_literals(tokens):
+        inside.update(range(open_index + 1, close_index))
+    return inside
 
 
 def _redirect_glue_point(word: str) -> "int | None":

@@ -756,7 +756,15 @@ def _url_payload_command(n: int) -> str:
 #: ``deny_gate`` forwards it behind a length-preserving guard. No matcher, rule,
 #: threshold or verdict moved -- the decision is byte-identical and the change is
 #: diagnostics-only. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_311
+#: Raised by 87, from 35,311, for the ssh floor's self-host read of a glob verb:
+#: a verb glob with a directory part always keeps host matching, a bare glob only
+#: in execute position (``_executed_program_indices`` over
+#: ``argv_rules._split_commands_indexed``), so a bare glob that only sits in a
+#: program's operands, a comment or a ``case`` arm is a filename, not a self-host;
+#: and ``_array_element_indices`` (reusing ``_array_literals`` beside
+#: ``_array_assignments``), so a bare glob inside an array literal
+#: (``files=( s* *.* )``) is an element, not an executed verb. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_398
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
