@@ -244,8 +244,15 @@ _EMPHASIS_RE = re.compile(r"\*\*|__|~~|`")
 _SPACE_RE = re.compile(r"\s+")
 
 
-def plain_excerpt(body: Any) -> str:
-    """The first ~280 characters of a markdown body as plain text.
+def strip_markdown(body: Any) -> str:
+    """A markdown body as plain text, WITH its line breaks.
+
+    The excerpt is built in two steps around a redaction pass: this strip, then
+    ``cut_excerpt``. The strip can join a secret the raw-row pass could not
+    recognise (split by ``**``, a link or a comment; a PEM header written with
+    emphasis), and some secrets are recognised only across their newlines (a PEM
+    key whose END line is missing), so ``cache.search_issues`` redacts this
+    whole, newline-preserving text before the excerpt flattens and cuts it.
 
     shortcut: a line-level strip (comments, fences, links, images, tags, list and
     heading markers, bold/code marks), not a markdown parser; upgrade if excerpts
@@ -253,12 +260,6 @@ def plain_excerpt(body: Any) -> str:
     """
     if not isinstance(body, str) or not body:
         return ""
-    # The body arrives redacted (``cache.search_issues`` redacts the raw rows
-    # before projection). A secret the raw pass could not recognise (split by
-    # ``**``, a link or a comment) only forms once the strip below joins it, and
-    # the final pass needs it whole, so the strip runs on the WHOLE body and the
-    # only cut is the word-boundary one below. Every pattern is linear and the
-    # provider output cap bounds the total input.
     text = _HTML_COMMENT_RE.sub(" ", body)
     text = _FENCE_RE.sub(" ", text)
     text = _IMAGE_RE.sub(r"\1", text)
@@ -266,14 +267,32 @@ def plain_excerpt(body: Any) -> str:
     text = _HTML_TAG_RE.sub(" ", text)
     text = _RULE_RE.sub(" ", text)
     text = _LINE_PREFIX_RE.sub("", text)
-    text = _EMPHASIS_RE.sub("", text).replace("|", " ")
+    return _EMPHASIS_RE.sub("", text).replace("|", " ")
+
+
+def cut_excerpt(text: str) -> str:
+    """The first ~280 characters of stripped *text*, on one line.
+
+    Runs after redaction. Flattening whitespace cannot join two runs into one, and
+    the cut lands on a word boundary only.
+    """
     text = _SPACE_RE.sub(" ", text).strip()
     if len(text) <= _EXCERPT_CHARS:
         return text
-    # Cut at a word boundary only: a hard cut inside a long unrecognised run
-    # would keep a fragment the final redaction pass cannot judge whole.
     cut = _drop_partial_word(text[: _EXCERPT_CHARS + 1]).rstrip()
     return cut + "…" if cut else ""
+
+
+def plain_excerpt(body: Any) -> str:
+    """The excerpt of *body* without the redaction pass between the two steps."""
+    return cut_excerpt(strip_markdown(body))
+
+
+def finish_issue_list(data: dict[str, Any]) -> dict[str, Any]:
+    """Cut each summary's stripped, already redacted body to its excerpt."""
+    for issue in projection._as_list(data.get("issues")):
+        issue["excerpt"] = cut_excerpt(str(issue.get("excerpt") or ""))
+    return data
 
 
 def _drop_partial_word(text: str) -> str:
@@ -463,7 +482,8 @@ def _github_summary(query: IssueQuery, item: dict[str, Any]) -> dict[str, Any] |
         "commentCount": projection._int_or_zero(item.get("comments")),
         "createdAt": str(item.get("created_at") or ""),
         "updatedAt": str(item.get("updated_at") or ""),
-        "excerpt": plain_excerpt(body),
+        # Stripped only; finish_issue_list cuts it after cache.search_issues redacts.
+        "excerpt": strip_markdown(body),
         "project": query.scope,
         "linkedChanges": [],
     }
@@ -579,11 +599,14 @@ _GITLAB_RAW_KEYS = frozenset(
     }
 )
 _GITLAB_MAX_RAW_PAIRS = 20
+# A GitLab project path is a URL path, never a filesystem one, so its separator
+# is always "/" (the same constant ``links`` names for URL paths).
+_URL_PATH_SEPARATOR = "/"
 _HEADER_INT_RE = re.compile(r"[0-9]{1,9}")
 
 
 def _validate_gitlab(query: IssueQuery) -> IssueQuery:
-    segments = query.scope.strip("/").split("/")
+    segments = query.scope.strip(_URL_PATH_SEPARATOR).split(_URL_PATH_SEPARATOR)
     if (
         len(segments) < 2
         or len(segments) > _GITLAB_MAX_PROJECT_SEGMENTS
@@ -603,7 +626,7 @@ def _validate_gitlab(query: IssueQuery) -> IssueQuery:
             raise IssueQueryError(f"{field} is not a valid GitLab username.")
     if query.raw:
         _gitlab_raw_pairs(query.raw)
-    return replace(query, host=host, scope="/".join(segments))
+    return replace(query, host=host, scope=_URL_PATH_SEPARATOR.join(segments))
 
 
 def _gitlab_raw_pairs(raw: str) -> list[tuple[str, str]]:
@@ -686,7 +709,8 @@ def _gitlab_summary(query: IssueQuery, item: dict[str, Any]) -> dict[str, Any] |
         "commentCount": projection._int_or_zero(item.get("user_notes_count")),
         "createdAt": str(item.get("created_at") or ""),
         "updatedAt": str(item.get("updated_at") or ""),
-        "excerpt": plain_excerpt(item.get("description")),
+        # Stripped only; finish_issue_list cuts it after cache.search_issues redacts.
+        "excerpt": strip_markdown(item.get("description")),
         "project": query.scope,
         "linkedChanges": [],
     }
@@ -791,5 +815,6 @@ async def search_issues(body: Any, *, refresh: bool = False) -> dict[str, Any]:
         query.cache_key(),
         lambda: provider.fetch(query),
         lambda rows: provider.project(query, rows),
+        finish_issue_list,
         refresh=refresh,
     )
