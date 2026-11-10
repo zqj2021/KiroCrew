@@ -227,6 +227,7 @@ from kiro_crew.mcp_gateway.daemon.launch import (  # noqa: F401
     _LAUNCH_APPROVAL_SNAPSHOT,
     TargetResolver,
     _approval_env_identity,
+    _backend_work_dir,
     _call_with_approval_snapshot,
     _coherent_env_sidecars,
     _declared_env_for_private_backend,
@@ -1303,7 +1304,14 @@ async def _acquire_backend(
             pool_key,
             fresh_approval_snapshot,
         )
-        if fresh_target is None or fresh_target[:2] != (command, args):
+        # The cwd is compared too: it decides what an interpreter loads, so a
+        # target whose directory moved while this spawn queued is not the one
+        # that was judged above.
+        if fresh_target is None or (*fresh_target[:2], fresh_target[3]) != (
+            command,
+            args,
+            work_dir,
+        ):
             raise _TargetUnknown(f"target approval changed for server {pool_key.server_name!r}")
         # The ssh-agent socket decision is re-judged here too: a grant withdrawn, or
         # a path refused, while this spawn queued must not reach the child. A
