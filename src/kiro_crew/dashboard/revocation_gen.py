@@ -31,10 +31,12 @@ logger = logging.getLogger(__name__)
 
 _REVOCATION_FILE = "token_revocation.gen"
 
-# Memoized counter. ``None`` = not yet loaded from disk. Guarded by the lock so
-# concurrent first reads / bumps agree on one value.
+# Memoized counter. ``None`` = not yet loaded from disk. ``_gen_lock`` guards it and
+# every token validation takes it, so no file write runs under it; ``_bump_lock``
+# serializes the writes instead.
 _gen: int | None = None
 _gen_lock = threading.Lock()
+_bump_lock = threading.Lock()
 
 
 def _warn_unreadable_counter(path: Path, reason: str, *, exc_info: bool = False) -> None:
@@ -58,8 +60,8 @@ def _load_revocation_gen_or_none() -> int | None:
     distinguish "gen is 0" from "could not read": treating a failed read as 0
     would silently undo a prior revocation. An EXISTING but empty file is
     unreadable, not 0 — it is evidence of an interrupted write, and the atomic
-    replace in :func:`bump_revocation_gen` means a healthy file always carries
-    a complete value.
+    replace in :func:`persist_next_revocation_gen` means a healthy file always
+    carries a complete value.
     """
     # circular import: config.loader pulls in modules that import token_auth
     # (which re-exports this module's names), so a top-level import here risks
@@ -120,38 +122,36 @@ def current_revocation_gen() -> int:
     return 0 if loaded is None else loaded
 
 
-def bump_revocation_gen() -> int:
-    """Increment and persist the revocation counter. Returns the new value.
+def persist_next_revocation_gen() -> int:
+    """Persist the next revocation counter and return it, WITHOUT publishing it.
 
     Fail-closed on I/O errors, in both directions:
 
-    * If the persisted base cannot be READ, raises ``OSError`` without writing:
-      bumping from an assumed 0 would persist a LOWER counter than on disk,
-      resurrecting previously revoked sessions after a restart.
-    * If the WRITE fails, raises ``OSError`` with the counter UNCHANGED in
-      memory and on disk. The in-memory value is published only after the
-      atomic replace succeeds, so a token can never be minted with a
-      generation that is not durable — an unpersisted generation would be
-      reloaded lower after restart, letting that token outlive a later
-      successful logout. The caller reports the failed logout instead of a
-      false success.
-
-    The lock is held through persistence so a concurrent reader never observes
-    a generation that might still fail to land; the write is a few bytes and
-    callers already run off the event loop for this path.
+    * If neither the live value nor the persisted one can be READ, raises
+      ``OSError`` without writing: bumping from an assumed 0 would persist a
+      LOWER counter than on disk, resurrecting sessions a logout already
+      revoked after a restart.
+    * If the WRITE fails, raises ``OSError`` with the counter UNCHANGED on
+      disk. The caller publishes the value only once this returns, so a token
+      can never be minted with a generation that is not durable — an
+      unpersisted generation would be reloaded lower after restart, letting
+      that token outlive a later successful logout.
     """
-    global _gen
     # circular import: see _load_revocation_gen_or_none.
     from kiro_crew.config.loader import config_dir
 
-    with _gen_lock:
-        base = _gen if _gen is not None else _load_revocation_gen_or_none()
-        if base is None:
+    with _bump_lock:
+        with _gen_lock:
+            live = _gen
+        # The file wins when it is ahead: an overlapping logout may have
+        # persisted its value without publishing it yet.
+        known = [g for g in (live, _load_revocation_gen_or_none()) if g is not None]
+        if not known:
             raise OSError(
                 "cannot read persisted token revocation counter; refusing to "
                 "bump from an assumed base"
             )
-        new_gen = base + 1
+        new_gen = max(known) + 1
         try:
             p = config_dir() / _REVOCATION_FILE
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -166,5 +166,31 @@ def bump_revocation_gen() -> int:
         except OSError:
             logger.warning("could not persist token revocation counter", exc_info=True)
             raise
-        _gen = new_gen
         return new_gen
+
+
+def publish_revocation_gen(new_gen: int) -> bool:
+    """Make *new_gen* the live counter, never lowering it; return whether it advanced.
+
+    Overlapping logouts can publish out of order, and a lower live value would
+    accept tokens a logout already revoked. ``False`` means a newer logout has
+    already published.
+    """
+    global _gen
+    with _gen_lock:
+        if _gen is not None and _gen >= new_gen:
+            return False
+        _gen = new_gen
+        return True
+
+
+def bump_revocation_gen() -> int:
+    """Persist and publish the next revocation counter. Returns the new value.
+
+    Raises ``OSError`` with the counter unchanged, in memory and on disk, on the
+    failures :func:`persist_next_revocation_gen` describes; the caller reports
+    the failed logout instead of a false success.
+    """
+    new_gen = persist_next_revocation_gen()
+    publish_revocation_gen(new_gen)
+    return new_gen

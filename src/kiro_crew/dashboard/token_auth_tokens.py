@@ -33,6 +33,8 @@ from kiro_crew.dashboard.revocation_gen import (
     bump_revocation_gen,
     current_revocation_gen,
     current_revocation_gen_or_none,
+    persist_next_revocation_gen,
+    publish_revocation_gen,
 )
 from kiro_crew.dashboard.token_secret import _get_secret
 from kiro_crew.sel import sel as _sel_fn
@@ -1098,7 +1100,9 @@ def revoke_all_sessions() -> None:
     cannot be read or the bumped value cannot be written — see
     ``bump_revocation_gen``. On failure the generation is unchanged (in memory
     and on disk) so no token is ever minted with an unpersisted generation;
-    the in-memory link/IP/consumed state has still been cleared.
+    the in-memory link/IP/consumed state has still been cleared. It runs
+    atomically only on the loop thread; the gateway's logout awaits
+    :func:`revoke_all_sessions_async` instead.
     """
     _sel_fn().log_api_access(
         caller="system",
@@ -1113,6 +1117,33 @@ def revoke_all_sessions() -> None:
     # next request. Both access-cookie and refresh-token validation check the
     # gen, so this ends established browser sessions AND their refresh chains.
     bump_revocation_gen()
+
+
+async def revoke_all_sessions_async() -> None:
+    """:func:`revoke_all_sessions` for the event loop: only the counter write leaves it.
+
+    A slow disk then delays the caller, not the loop. Publishing the new generation
+    and clearing the link/IP/consumed state stay on the loop, one right after the
+    other, so no loop handler sees a half-done logout and every pin stays in force
+    while the write is in flight. A logout a newer one already published over leaves
+    the state alone. Raises ``OSError`` as :func:`revoke_all_sessions` does, with the
+    state still cleared.
+    """
+    _sel_fn().log_api_access(
+        caller="system",
+        operation="dashboard_sessions_revoked",
+        outcome="ok",
+        source="token_auth",
+        resources="action=revoke_all",
+    )
+    advanced = True
+    try:
+        new_gen = await asyncio.to_thread(persist_next_revocation_gen)
+        advanced = publish_revocation_gen(new_gen)
+    finally:
+        # A superseded logout must not clear pins bound since the newer one cleared.
+        if advanced:
+            _state.clear_all()
 
 
 def parse_duration(s: str) -> int | None:
