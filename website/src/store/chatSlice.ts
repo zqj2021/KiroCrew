@@ -27,6 +27,7 @@ import type { RootState } from './index'
 import type { ChatMessage, SideSnapshot, TurnIdentityFields } from '../types'
 import { SOFT_STOP_DEBOUNCE_MS } from '../pages/chat/types'
 import { mergePreservedPastes } from '../utils/pasteTokens'
+import { forgetSlotUploadFailure } from '../utils/slotUploadFailures'
 import { initialState, type ChatState } from './chat/state'
 import type { AgentSwitchNotice } from '../utils/agentSwitchFeedback'
 import { filterMessages, isUnsafeKey, safeKey } from './chat/wire'
@@ -785,6 +786,8 @@ export const deleteSlot = createAsyncThunk<
       // the error being propagated.
       await navigation
     }
+    // A closed chat is never shown again, so a failure held for it never would be.
+    forgetSlotUploadFailure(key)
     return fulfillWithValue(key, { alreadyGone })
   },
 )
