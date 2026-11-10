@@ -162,8 +162,15 @@ def test_the_import_carries_an_existing_set_over_once(tmp_path, app_home):
 
 def test_the_import_keeps_a_legacy_record_approving_what_it_declares(tmp_path, app_home):
     _legacy_home(tmp_path, stored=False, legacy=None)
+    _declare([OLD_API, NEW_API])
 
     assert _granted() == [OLD_API, NEW_API]
+    # Fixed at that first read: a later write to the app's own manifest widens nothing.
+    _declare([OLD_API, NEW_API, "/api/config"])
+    assert staged_app_grants(APP, "api", lambda: [OLD_API, NEW_API, "/api/config"]) == [
+        OLD_API,
+        NEW_API,
+    ]
 
 
 def test_the_import_reads_a_lost_set_as_nothing_approved(tmp_path, app_home):
@@ -278,7 +285,7 @@ def test_the_import_holds_its_lock_until_the_marker_is_written(tmp_path, app_hom
     _legacy_home(tmp_path, stored=True, legacy={"api": [OLD_API], "events": []})
     lock_path = member_records.records_dir(protected_app_state.APP_GRANTS_KIND) / ".importing"
     seen: list[bool] = []
-    real_write = protected_app_state.write_grants_text
+    real_write = protected_app_state.write_grants_text_locked
 
     def _write_while_probing(name, text):
         # Another importer, thread or process, cannot take the lock mid-pass.
@@ -292,9 +299,11 @@ def test_the_import_holds_its_lock_until_the_marker_is_written(tmp_path, app_hom
             os.close(fd)
         real_write(name, text)
 
-    monkeypatch.setattr(protected_app_state, "write_grants_text", _write_while_probing)
+    monkeypatch.setattr(protected_app_state, "write_grants_text_locked", _write_while_probing)
     assert _granted() == [OLD_API]
-    assert seen == [False]
+    # The import's write holds the lock, and so does the one after it that fixes the
+    # families the carried-over set was written before.
+    assert seen == [False, False]
     assert protected_app_state.grants_imported()
 
 

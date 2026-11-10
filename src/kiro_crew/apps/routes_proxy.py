@@ -23,7 +23,6 @@ from aiohttp import web
 
 from kiro_crew.apps.backend import get_app_backend_port
 from kiro_crew.apps.manager import (
-    apps_dir,
     get_app_manifest,
     is_app_enabled,
     resolve_mcp_backend_url,
@@ -83,8 +82,10 @@ def _get_app_secret(name: str) -> str:
     cached = _app_secret_cache.get(name)
     if cached:
         return cached
-    path = apps_dir() / name / ".app_secret"
-    secret = path.read_text().strip() if path.is_file() else ""
+    # circular import: token_auth -> app_secret_store -> manager -> routes
+    from kiro_crew.dashboard.token_auth import read_app_secret
+
+    secret = read_app_secret(name)
     if secret:
         _app_secret_cache[name] = secret
     return secret
@@ -358,7 +359,8 @@ async def handle_app_api_proxy(
     # using the app secret as key. Backend verifies by recomputing with its
     # copy of the secret and checking the timestamp is recent (±60s).
     try:
-        secret = _get_app_secret(name)
+        # Off the loop: an uncached read goes to the sealed store on disk.
+        secret = await asyncio.to_thread(_get_app_secret, name)
         if not secret:
             return web.json_response(
                 {"error": f"app {name!r} has no secret — cannot authenticate proxy request"},
