@@ -182,6 +182,10 @@ def status_update_fields() -> dict[str, object]:
             str(_update_info.get("channel") or ""),
         ),
         "update_channel": str(_update_info.get("channel") or ""),
+        # The About page's "Upcoming update" block: version, date, highlights,
+        # notes link and ``announced`` or ``ready``. ``None`` when there is no
+        # newer build and no announcement. Display only.
+        "update_upcoming": _update_info.get("upcoming") or None,
         # Is the running build ahead of everything the FOLLOWED channel
         # publishes? The panel keys its "you must re-run the installer to move
         # onto this lane" copy on this rather than on a comparison of
@@ -785,6 +789,48 @@ async def _check_via_provider(provider: CommandProvider) -> None:
     )
 
 
+async def _upcoming_for_feed(
+    url: str,
+    *,
+    channel: str,
+    remote_version: str,
+    available: bool,
+    pub_date: object,
+) -> dict[str, object] | None:
+    """The About page's "Upcoming update" record, or ``None`` when there is none.
+
+    Display only: nothing here decides whether or when anything installs.
+    ``ready`` is the feed offering a newer build now; ``announced`` is an
+    optional ``announce.json`` naming a version newer than this install that the
+    feed does not offer yet. Reading it costs one more bounded GET per check,
+    through the same fetch, timeout and 12-hour cache as the manifest, and a
+    missing or malformed file leaves only what the feed itself says.
+    """
+    # Imported here, not at module level: a module-level name would be served
+    # through the ``updates`` facade, which this display-only helper does not need.
+    from kiro_crew.dashboard.handlers import _update_announce
+
+    announcement = await _update_announce.fetch_announcement(
+        url, _fetch_feed_bytes, channel=channel, max_bytes=_FEED_MAX_BYTES
+    )
+    if available:
+        shown = _display_version(remote_version, channel)
+        named = announcement is not None and (
+            _display_version(announcement["version"], channel) == shown
+        )
+        return dict(
+            _update_announce.compose_upcoming(
+                announcement if named else None, ready=True, version=shown, pub_date=pub_date
+            )
+        )
+    if announcement is None or _is_newer(announcement["version"], _local_version) is not True:
+        return None
+    version = _display_version(announcement["version"], channel)
+    return dict(
+        _update_announce.compose_upcoming(announcement, ready=False, version=version, pub_date=None)
+    )
+
+
 async def _check_release_feed(capability: UpdateCapability) -> None:
     """Compare a feed-checkable install against the release channel it came from.
 
@@ -919,6 +965,13 @@ async def _check_release_feed(capability: UpdateCapability) -> None:
                 )
     elif floor is not None:
         logger.warning("Release feed %s carries an unusable min_version", url)
+    extra["upcoming"] = await _upcoming_for_feed(
+        f"{feed_base}/feed/{channel}/announce.json",
+        channel=channel,
+        remote_version=remote_version,
+        available=available,
+        pub_date=pub_date,
+    )
     # No ``changes``: the manifest carries no changelog, and the CHANGELOG.md
     # bundled into the wheel describes the version already INSTALLED, not the new
     # one. The dashboard's "view full changelog" disclosure covers the gap
