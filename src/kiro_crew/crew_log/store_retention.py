@@ -14,14 +14,17 @@ entries a creator recorded over its whole log.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import deque
 from collections.abc import Container
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 
 from kiro_crew.crew_log.errors import CrewLogError
 from kiro_crew.crew_log.schema import KIND_SESSION, MAX_ENTRY_BYTES, Entry
+from kiro_crew.crew_log.store_cuts import read_cuts
 from kiro_crew.crew_log.store_paths import _checked_crew_log_root, _segment_first_seq, logger
 from kiro_crew.crew_log.store_removal import REMOVE_FAILED, REMOVE_REMOVED, _is_held, remove_unit
 from kiro_crew.crew_log.store_segment_reads import (
@@ -31,7 +34,11 @@ from kiro_crew.crew_log.store_segment_reads import (
     _scan_tail,
     _Tail,
 )
-from kiro_crew.jsonl_util import UnreadableRecord, strict_raw_records
+from kiro_crew.jsonl_util import (
+    UnreadableRecord,
+    strict_raw_records,
+    strict_raw_records_with_offsets,
+)
 from kiro_crew.session_ledger import _store_name, is_link
 
 #: The teardown marker. A unit whose newest lifecycle entry is not this one is
@@ -545,6 +552,161 @@ def find_spawned_entries(
                     f"crew log segment {segment.name} holds an unreadable record"
                 ) from exc
     return list(kept), cut, hit_cap
+
+
+#: Where a boot's read of one unit's log stopped: the first seq of the oldest and of the
+#: newest segment, the newest segment's inode, the byte offset into it the read reached,
+#: and the unit's settled cut count (:func:`read_cuts`). Any change to these, or a newest
+#: segment shorter than the offset, means the bytes before the offset are not the ones
+#: that were read. The cut count is what catches a rolled-back append that a later
+#: append brought back to the same length.
+TreeMark = tuple[int, int, int, int, int]
+
+_TREE_NEEDLES = (b'"session/adopted"', b'"session/released"', _SPAWNED_NEEDLE)
+
+
+@dataclass(frozen=True)
+class TreeRead:
+    """What :func:`read_tree_since` found in one unit's log.
+
+    ``edge`` is the newest adoption or release in the bytes read, ``spawns`` the newest
+    *limit* ``session/spawned`` entries there, oldest first, with ``cut`` and
+    ``hit_cap`` as :func:`find_spawned_entries` defines them. ``full`` says the whole
+    log was read, so these are the unit's whole answer; otherwise they cover only the
+    bytes after the mark passed in. ``mark`` is where the next read starts, or ``None``
+    when the cut count was not settled across the read, so the next read is a full one.
+    """
+
+    mark: "TreeMark | None"
+    edge: "Entry | None"
+    spawns: "list[Entry]"
+    cut: bool
+    hit_cap: bool
+    full: bool
+
+
+class _MarkStale(Exception):
+    """The mark does not describe the bytes on disk; read the unit in full."""
+
+
+def read_tree_since(
+    directory: Path,
+    mark: "TreeMark | None",
+    limit: int,
+    self_parented: "Container[str]" = frozenset(),
+) -> "TreeRead | None":
+    """The tree entries in *directory*'s log after *mark*, or in the whole log.
+
+    One pass over the bytes for decisions and spawns together. With a *mark* whose
+    segments, inode, length and cut count still hold, only the newest segment from the
+    mark's offset to its end is read. Anything else -- no mark, a new or removed segment,
+    a replaced or shorter file, a cut (a rollback included) or a cut count that proves
+    nothing, an offset that is not a record boundary -- reads every segment from its
+    start. ``None`` when the unit has no segments.
+
+    The offset only moves past records that end in a terminator, so a record a writer
+    is still appending is read whole by the next call. A final record that is whole but
+    unterminated (an interrupted append) is folded now, as the tail reader folds it, and
+    read again by the next call; folding it twice changes nothing.
+
+    Raises ``OSError`` or ``ValueError`` like :func:`find_last_tree_edge`.
+    """
+    try:
+        return _read_tree(directory, mark, limit, self_parented)
+    except _MarkStale:
+        return _read_tree(directory, None, limit, self_parented)
+
+
+def _read_tree(
+    directory: Path,
+    mark: "TreeMark | None",
+    limit: int,
+    self_parented: "Container[str]",
+) -> "TreeRead | None":
+    found = sorted(
+        (first, child)
+        for child in directory.iterdir()
+        if (first := _segment_first_seq(child)) is not None
+    )
+    if not found:
+        return None
+    cuts = read_cuts(directory)
+    oldest_first, newest_first = found[0][0], found[-1][0]
+    if mark is not None and (
+        (mark[0], mark[1]) != (oldest_first, newest_first) or cuts is None or cuts != mark[4]
+    ):
+        raise _MarkStale
+    if mark is not None:
+        stat = found[-1][1].stat()
+        if (stat.st_ino, stat.st_size) == (mark[2], mark[3]):
+            # Nothing appended since the mark: one stat, no open. The common case.
+            return TreeRead(mark=mark, edge=None, spawns=[], cut=False, hit_cap=False, full=False)
+    segments = found if mark is None else found[-1:]
+    edge: Entry | None = None
+    kept: "deque[Entry]" = deque(maxlen=max(limit, 0))
+    cut = hit_cap = False
+    inode = offset = 0
+    for first, segment in segments:
+        with open(segment, "rb") as handle:
+            start = 0
+            if first == newest_first:
+                stat = os.fstat(handle.fileno())
+                inode = stat.st_ino
+                if mark is not None:
+                    start = mark[3]
+                    if mark[2] != inode or start > stat.st_size:
+                        raise _MarkStale
+                    if start > 0:
+                        handle.seek(start - 1)
+                        if handle.read(1) not in (b"\n", b"\r"):
+                            raise _MarkStale
+            handle.seek(start)
+            offset = start
+            try:
+                for _start, end, raw in strict_raw_records_with_offsets(
+                    handle, segment, cap=MAX_ENTRY_BYTES
+                ):
+                    terminated = raw.endswith((b"\n", b"\r"))
+                    if terminated:
+                        offset = end
+                    if not any(needle in raw for needle in _TREE_NEEDLES):
+                        if not terminated:
+                            break
+                        continue
+                    parsed = _parses_to_object(raw.strip())
+                    entry = None if parsed is None else Entry.from_dict(parsed)
+                    if entry is None:
+                        if not terminated:
+                            # Still being appended: left for the next read, whole.
+                            break
+                        continue
+                    if entry.type in _TREE_EDGE_TYPES:
+                        edge = entry
+                    elif entry.type == _SPAWNED_TYPE:
+                        # The same cap rule :func:`find_spawned_entries` applies.
+                        if kept.maxlen and len(kept) == kept.maxlen:
+                            hit_cap = True
+                            if _spawned_child_slot(kept[0]) not in self_parented:
+                                cut = True
+                        kept.append(entry)
+            except UnreadableRecord as exc:
+                raise ValueError(
+                    f"crew log segment {segment.name} holds an unreadable record"
+                ) from exc
+    # Marked only when no cut started or ended while the bytes were read.
+    settled = cuts is not None and read_cuts(directory) == cuts
+    return TreeRead(
+        mark=(
+            (oldest_first, newest_first, inode, offset, cuts)
+            if settled and cuts is not None
+            else None
+        ),
+        edge=edge,
+        spawns=list(kept),
+        cut=cut,
+        hit_cap=hit_cap,
+        full=mark is None,
+    )
 
 
 def _scan_whole_for_types(segment: Path, types: "frozenset[str]") -> "Entry | None":

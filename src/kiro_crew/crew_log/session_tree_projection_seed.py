@@ -1,8 +1,7 @@
 """The session tree projection's cold start: the state, established once per process and store.
 
 ``ensure_seeded`` loads the checkpoint and reconciles it against the store with one tail
-replay proportional to the delta (``_replay_tail`` for records and decisions,
-``_replay_spawned`` for spawns) or, with no usable checkpoint, seeds from one cold
+replay proportional to the delta (``_replay_tail``: each unit's log after its mark) or, with no usable checkpoint, seeds from one cold
 :class:`~kiro_crew.crew_log.session_tree.SessionTree` scan. It installs the result over
 the commits made while the scan ran (``_install_seed_locked`` and its two siblings), and
 re-attempts a seed that raised once ``SEED_RETRY_COOLDOWN_SECS`` has passed, on a timer
@@ -11,12 +10,11 @@ of its own. Each function here whose first parameter is ``self`` is bound as the
 :mod:`kiro_crew.crew_log.session_tree_projection`, which keeps the projection's state,
 so ``self.<name>(...)`` calls and instance and class patches reach it as they reach a
 method defined in the class body. They read ``_cancel_epoch``, ``_edges``,
-``_forgotten_while_seeding``, ``_lock``, ``_records``, ``_root``, ``_scans``,
-``_seed_gate``, ``_seed_retry_at``, ``_seed_retry_timer``, ``_seeded``, ``_spawn_scans``
-and ``_spawned``, write ``_cancel_epoch``, ``_dirty``, ``_edges``, ``_fault_sids``,
-``_incomplete``,
-``_nodes``, ``_over_cap``, ``_records``, ``_root``, ``_scans``, ``_seed_retry_at``,
-``_seed_retry_timer``, ``_seeded``, ``_seeding``, ``_spawn_scans``, ``_spawned``,
+``_forgotten_while_seeding``, ``_lock``, ``_marks``, ``_records``, ``_root``,
+``_seed_gate``, ``_seed_retry_at``, ``_seed_retry_timer``, ``_seeded`` and ``_spawned``,
+write ``_cancel_epoch``, ``_dirty``, ``_edges``, ``_fault_sids``, ``_incomplete``,
+``_marks``, ``_nodes``, ``_over_cap``, ``_records``, ``_root``, ``_seed_retry_at``,
+``_seed_retry_timer``, ``_seeded``, ``_seeding``, ``_spawned``,
 ``_suspect_sids`` and ``_unattributed_gap``, and update ``_forgotten_while_seeding`` and
 ``_suspect_sids`` in place. New seeding work goes here.
 """
@@ -113,7 +111,7 @@ def ensure_seeded(self: SessionTreeProjection, live_sids: "tuple[str, ...]" = ()
                 self._records = {}
                 self._edges = {}
                 self._spawned = {}
-                self._spawn_scans = {}
+                self._marks = {}
                 self._nodes = None
                 self._incomplete = False
                 self._fault_sids = set()
@@ -358,13 +356,9 @@ def _seed_inner(self: SessionTreeProjection, live_sids: "tuple[str, ...]") -> No
         self._schedule_checkpoint()
         return
     faults = _ScanFaults()
-    records, edges, scans, incomplete, over_cap = self._replay_tail(
-        loaded[0], loaded[1], loaded[2], faults=faults
+    records, edges, spawned, marks, incomplete, over_cap = self._replay_tail(
+        loaded[0], loaded[1], loaded[2], loaded[3], faults=faults
     )
-    spawned, spawn_scans, spawn_incomplete = self._replay_spawned(
-        records, loaded[3], loaded[4], faults=faults
-    )
-    incomplete = incomplete or spawn_incomplete
     with self._lock:
         self._incomplete = incomplete
         self._fault_sids = set()
@@ -372,32 +366,26 @@ def _seed_inner(self: SessionTreeProjection, live_sids: "tuple[str, ...]") -> No
         self._suspect_sids = set(faults.sids)
         self._unattributed_gap = faults.unattributed
         self._install_seed_locked(records)
+        # Kept only for units the merge actually holds, so the marks cannot outlive the
+        # population they describe. Installed BEFORE the decisions and spawns, because
+        # installing them can evict past the cap, and eviction drops the evicted unit's
+        # mark; assigning afterwards would restore it, and the next boot would read
+        # only the delta of a unit whose evidence is not all held.
+        self._marks = {sid: mark for sid, mark in marks.items() if sid in self._records}
         self._install_seed_edges_locked(edges)
-        # Kept only for units the merge actually holds, so the cache cannot outlive
-        # the population it describes and grow without bound across boots.
-        self._scans = {sid: ident for sid, ident in scans.items() if sid in self._records}
-        # Installed BEFORE the spawns, because installing them can evict past the
-        # cap, and eviction drops the evicted unit's identity. Assigning the cache
-        # afterwards would restore it, and the next boot would skip a unit whose
-        # spawns are not all held.
-        self._spawn_scans = {
-            sid: ident for sid, ident in spawn_scans.items() if sid in self._records
-        }
         self._install_seed_spawned_locked(spawned)
         self._nodes = None
         self._seeded = True
         # Compared AFTER the merge, against the state actually installed: a record
         # that arrived during the scan is a difference from the checkpoint and owes
-        # a write, which comparing the replay's own output would miss. The scan cache
-        # counts too: a boot that learned a unit records no decision has something
-        # worth writing even when the tree itself did not move, since that is exactly
-        # what spares the NEXT boot the read.
+        # a write, which comparing the replay's own output would miss. The marks
+        # count too: a boot that read further has something worth writing even when
+        # the tree itself did not move, since that is what spares the NEXT boot the read.
         moved = (
             self._records != loaded[0]
             or self._edges != loaded[1]
-            or self._scans != loaded[2]
-            or self._spawned != loaded[3]
-            or self._spawn_scans != loaded[4]
+            or self._spawned != loaded[2]
+            or self._marks != loaded[3]
         )
         if moved:
             self._dirty = True
@@ -411,45 +399,52 @@ def _replay_tail(
     self: SessionTreeProjection,
     loaded: dict[str, OpenedRecord],
     loaded_edges: dict[tuple[str, str], EdgeRecord],
-    loaded_scans: "dict[str, ScanIdentity] | None" = None,
+    loaded_spawned: "dict[tuple[str, str], EdgeRecord] | None" = None,
+    loaded_marks: "dict[str, ScanIdentity] | None" = None,
     *,
     faults: "_ScanFaults | None" = None,
 ) -> "_ReplayResult":
     """Reconcile a loaded checkpoint against the store, at the cost of the DELTA.
 
-    One ``iterdir`` for the root's entry NAMES -- no per-unit stat, which is the
-    syscall the projection exists to stop paying per read. A name the checkpoint does
-    not hold gets its head read; a held record whose name is gone is dropped.
-    Normally both of those sets are empty and the head half is a single directory
-    listing.
+    One ``iterdir`` for the root's entry NAMES -- no per-unit stat. A name the
+    checkpoint does not hold gets its head read; a held record whose name is gone is
+    dropped with its decisions, spawns and mark.
 
-    The DECISIONS are reconciled on different terms, and they have to be. A head is
-    immutable once read, so a name the checkpoint already holds needs no second
-    look; a decision lives at the END of a log and a session can be adopted at any
-    moment, so a unit already in the checkpoint is exactly where a decision the
-    checkpoint missed will be. This therefore reads every admitted unit's tail, not
-    only the new ones -- a listing, a ``stat`` and a bounded read per unit, paid
-    once per process on the cold start. Skipping the held ones would make the
-    checkpoint authoritative for adoptions, and a stale one would leave a session
-    hanging under a parent that released it with nothing to correct it.
+    Then each admitted unit's log is read from its mark: the decisions and spawns the
+    checkpoint holds cover the log up to there, so only the bytes after it can hold one
+    the checkpoint missed -- including one another process wrote while no gateway ran.
+    A unit with no mark (new, or its evidence was evicted) and a unit whose segments
+    changed under its mark (a new or removed segment, a replaced or shorter file) are
+    read in full, and a full read REPLACES the unit's held answer: a complete read that
+    finds nothing is the evidence that a held decision or spawn was retained out of the
+    log.
 
-    Returns ``(records, edges, incomplete, over_cap)``. A listing that fails at all
-    makes the answer ``incomplete``: the records are still served, because a stale
-    edge renders as a root and that is the pre-existing degradation, but a reader
-    that DECIDES on an edge is told the reconciliation did not complete.
+    Returns ``(records, edges, spawned, marks, incomplete, over_cap)``. A listing that
+    fails at all makes the answer ``incomplete``: the records are still served, because
+    a stale edge renders as a root and that is the pre-existing degradation, but a
+    reader that DECIDES on an edge is told the reconciliation did not complete. A unit
+    whose read raises keeps its held answer and its old mark, and is reported.
     """
-    from kiro_crew.crew_log.session_tree import TREE_UNIT_CAP, edge_record, opened_record
+    from kiro_crew.crew_log.session_tree import (
+        SPAWNED_PER_UNIT_CAP,
+        TREE_UNIT_CAP,
+        edge_record,
+        opened_record,
+        spawned_record,
+    )
     from kiro_crew.crew_log.store import (
         _checked_crew_log_root,
-        find_last_tree_edge,
         oldest_segment,
         read_head,
-        tree_edge_scan_identity,
+        read_tree_since,
     )
 
+    loaded_spawned = loaded_spawned or {}
     records = dict(loaded)
     edges = dict(loaded_edges)
-    scans = dict(loaded_scans or {})
+    # Spawns cited by a unit the checkpoint holds no record for are dropped.
+    spawned = {key: s for key, s in loaded_spawned.items() if s.sid in records}
+    marks = dict(loaded_marks or {})
     incomplete = False
     try:
         root = _checked_crew_log_root(KIND_SESSION)
@@ -461,7 +456,7 @@ def _replay_tail(
     except FileNotFoundError:
         # No store root yet: nothing has been written on this home. An absence, not
         # a fault, and the checkpoint's own records are all there is to serve.
-        return records, edges, scans, False, False
+        return records, edges, spawned, marks, False, False
     except OSError:
         logger.warning(
             "session tree projection: the store root could not be listed, so its "
@@ -470,7 +465,7 @@ def _replay_tail(
         )
         if faults is not None:
             faults.unattributed = True
-        return records, edges, scans, True, False
+        return records, edges, spawned, marks, True, False
 
     held = {_store_name(sid): sid for sid in records}
     gone = [sid for name, sid in held.items() if name not in names]
@@ -480,6 +475,9 @@ def _replay_tail(
         # rule ``forget`` applies for the same reason.
         for key in [k for k, edge in edges.items() if edge.sid == sid]:
             edges.pop(key, None)
+        for key in [k for k, spawn in spawned.items() if spawn.sid == sid]:
+            spawned.pop(key, None)
+        marks.pop(sid, None)
     new = [name for name in names if name not in held]
     # The cap bounds this loop like every other loop over the population. Past it
     # the replay has not seen everything, which is what ``over_cap`` reports.
@@ -508,11 +506,9 @@ def _replay_tail(
 
     # The decision pass, over every unit the records now cover -- the checkpoint's
     # and the ones just read. Keyed off the records because a decision is keyed by
-    # SLOT and the record is where this reconciliation knows the slot from, the same
-    # way the scanner reads the head first and the tail second. Each unit keeps its
-    # OWN decision, so the comparison below settles two readings of one log; which
-    # LOG speaks for a slot is the fold's single decision, made with the ranking it
-    # derives from these same records.
+    # SLOT and the record is where this reconciliation knows the slot from. Each unit
+    # keeps its OWN decision, so the comparison below settles two readings of one log;
+    # which LOG speaks for a slot is the fold's single decision.
     held_records = list(records.values())
     if faults is not None:
         # Past the cap the pass below reads no decision, yet the record itself is
@@ -520,149 +516,66 @@ def _replay_tail(
         # be the one evicted. A unit whose decision was never read is suspect for the
         # same reason one whose read faulted is.
         faults.sids.extend(r.sid for r in held_records[TREE_UNIT_CAP:] if r.sid)
+    # Children whose own log already names a parent: the fold applies that over any
+    # spawn, so dropping such a spawn past the cap must not report the creator cut.
+    self_parented = {rec.slot for rec in records.values() if rec.slot and rec.parent_slot}
     for record in held_records[:TREE_UNIT_CAP]:
         if not record.slot:
             continue
         directory = root / _store_name(record.sid)
         key = (record.slot, record.sid)
+        mark = marks.pop(record.sid, None)
+        held_spawns = {k: sp for k, sp in spawned.items() if sp.sid == record.sid}
         try:
-            identity = tree_edge_scan_identity(directory)
-        except OSError:
-            # Could not even stat the unit, so nothing is established about it.
-            incomplete = True
-            if faults is not None:
-                faults.sids.append(record.sid)
-            continue
-        if identity is not None and key not in edges and scans.get(record.sid) == identity:
-            # An earlier complete read of these same bytes found no decision, and no
-            # decision is held for this unit to confirm or drop -- so the read would
-            # re-derive a verdict already in hand. This is the case that dominates a
-            # real store: most sessions are never adopted, and their logs stop
-            # changing once they close, while the read they would otherwise cost is
-            # proportional to the whole log rather than to a window of it.
-            continue
-        try:
-            # The WHOLE log, not a tail window: this is the cold path, so a decision
-            # it cannot reach is not recovered by anything later -- the fold would
-            # serve the creating edge for a session that has been moved.
-            entry = find_last_tree_edge(directory)
+            read = read_tree_since(directory, mark, SPAWNED_PER_UNIT_CAP, self_parented)
+            if read is not None and not read.full:
+                # Validated first: a malformed spawn is dropped here as it is below.
+                fresh = {
+                    spawn.slot
+                    for e in read.spawns
+                    if (spawn := spawned_record(record.slot, record.sid, e)) is not None
+                }
+                if len(held_spawns) + len(fresh - {k[0] for k in held_spawns}) > (
+                    SPAWNED_PER_UNIT_CAP
+                ):
+                    # Past the per-unit cap, which only a whole read can apply.
+                    read = read_tree_since(directory, None, SPAWNED_PER_UNIT_CAP, self_parented)
         except (OSError, ValueError):
             incomplete = True
             if faults is not None:
                 faults.sids.append(record.sid)
+            if mark is not None:
+                marks[record.sid] = mark
             continue
-        found = edge_record(record.slot, record.sid, entry)
-        if found is None:
-            # The read SUCCEEDED and found no decision, which is a verdict rather
-            # than a gap: this log does not record one, so a decision the checkpoint
-            # carries for it has been retained out of the log and must not outlive
-            # it. Keeping it would pin the slot under a parent with nothing on disk
-            # behind it, and no later scan would ever contradict it -- a complete
-            # read that finds nothing is the only thing that can, and it is here.
-            # A read that RAISED took the branch above and leaves the edge alone.
-            edges.pop(key, None)
-            if identity is not None:
-                # Remembered so the next boot can reach this same verdict without the
-                # read. Only the NEGATIVE verdict is worth caching: a decision that
-                # was found is carried by ``edges`` itself.
-                scans[record.sid] = identity
+        found = None if read is None else edge_record(record.slot, record.sid, read.edge)
+        if read is None or read.full:
+            if found is None:
+                # A complete read found no decision: one the checkpoint carries for this
+                # log has been retained out of it and must not outlive it.
+                edges.pop(key, None)
+            for spawn_key in held_spawns:
+                spawned.pop(spawn_key, None)
+        if found is not None:
+            candidate = edges.get(key)
+            if candidate is None or edge_supersedes(found, candidate, None):
+                edges[key] = found
+        if read is None:
             continue
-        scans.pop(record.sid, None)
-        candidate = edges.get(key)
-        if candidate is None or edge_supersedes(found, candidate, None):
-            edges[key] = found
-    return records, edges, scans, incomplete or over_cap, over_cap
-
-
-def _replay_spawned(
-    self: SessionTreeProjection,
-    records: dict[str, OpenedRecord],
-    loaded_spawned: dict[tuple[str, str], EdgeRecord],
-    loaded_scans: "dict[str, ScanIdentity]",
-    *,
-    faults: "_ScanFaults | None" = None,
-) -> "tuple[dict[tuple[str, str], EdgeRecord], dict[str, ScanIdentity], bool]":
-    """Reconcile the checkpoint's spawns against the store, unit by unit.
-
-    A unit whose log identity still matches the one its spawns were last read at
-    keeps the checkpoint's answer with no read. Any other unit is read in full and
-    its answer replaces the checkpoint's -- including with none, since a complete
-    read that finds nothing is the only evidence that the entries are gone. A read
-    that raises keeps the checkpoint's answer and reports the replay incomplete.
-    Spawns cited by a unit missing from *records* are dropped.
-
-    Returns ``(spawned, spawn_scans, incomplete)``.
-    """
-    from kiro_crew.crew_log.session_tree import (
-        SPAWNED_PER_UNIT_CAP,
-        TREE_UNIT_CAP,
-        spawned_record,
-    )
-    from kiro_crew.crew_log.store import (
-        _checked_crew_log_root,
-        find_spawned_entries,
-        tree_edge_scan_identity,
-    )
-
-    spawned = {key: s for key, s in loaded_spawned.items() if s.sid in records}
-    scans = {sid: ident for sid, ident in loaded_scans.items() if sid in records}
-    incomplete = False
-    # Children whose own log already names a parent: the fold applies that over any
-    # spawn, so a spawn for such a child is dead weight and dropping it past the cap
-    # must not report the creator cut.
-    self_parented = {rec.slot for rec in records.values() if rec.slot and rec.parent_slot}
-    try:
-        root = _checked_crew_log_root(KIND_SESSION)
-    except OSError:
-        # Already reported by the record replay, which lists the same root.
-        return spawned, scans, True
-    for record in list(records.values())[:TREE_UNIT_CAP]:
-        if not record.slot:
-            continue
-        directory = root / _store_name(record.sid)
-        try:
-            identity = tree_edge_scan_identity(directory)
-        except OSError:
-            incomplete = True
-            if faults is not None:
-                faults.sids.append(record.sid)
-            continue
-        if identity is not None and scans.get(record.sid) == identity:
-            continue
-        try:
-            entries, cut, hit_cap = (
-                find_spawned_entries(directory, SPAWNED_PER_UNIT_CAP, self_parented)
-                if identity is not None
-                else ([], False, False)
-            )
-        except (OSError, ValueError):
-            incomplete = True
-            if faults is not None:
-                faults.sids.append(record.sid)
-            continue
-        for key in [k for k, s in spawned.items() if s.sid == record.sid]:
-            spawned.pop(key, None)
-        for entry in entries:
+        for entry in read.spawns:
             spawn = spawned_record(record.slot, record.sid, entry)
             if spawn is not None:
                 spawned[(spawn.slot, spawn.sid)] = spawn
-        if cut:
+        if read.cut:
             # A load-bearing cut is not this unit's whole answer: report it.
             incomplete = True
             if faults is not None:
                 faults.sids.append(record.sid)
-        if hit_cap:
-            # The cap evicted at least one spawn, self-parented or not. Even when
-            # the eviction was all self-parented (cut suppressed), a later removal
-            # of one of those children's own logs leaves this creator's identity
-            # unchanged -- so caching this scan would re-serve an answer that is no
-            # longer complete. Never cache a capped scan; re-read it next boot.
-            scans.pop(record.sid, None)
-        elif identity is not None:
-            scans[record.sid] = identity
-        else:
-            scans.pop(record.sid, None)
-    return spawned, scans, incomplete
+        if not read.hit_cap and read.mark is not None:
+            # A capped read is never marked: a self-parented child whose spawn the cap
+            # evicted can later lose its own log without this log changing, and only a
+            # whole read would then see that the evicted spawn is load-bearing.
+            marks[record.sid] = read.mark
+    return records, edges, spawned, marks, incomplete or over_cap, over_cap
 
 
 def _arm_seed_retry(self: SessionTreeProjection, root: "str | None", epoch: int) -> None:

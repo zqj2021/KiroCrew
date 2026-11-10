@@ -11,8 +11,8 @@ the ``SessionTreeProjection`` attribute of the same name in
 :mod:`kiro_crew.crew_log.session_tree_projection`, which keeps the projection's state,
 so ``self.<name>(...)`` calls and instance and class patches reach it as they reach a
 method defined in the class body. They read ``_cancel_epoch``, ``_dirty``, ``_edges``,
-``_lock``, ``_records``, ``_root``, ``_scans``, ``_seed_retry_timer``, ``_spawn_scans``,
-``_spawned`` and ``_write_scheduled``, and write ``_cancel_epoch``, ``_dirty``,
+``_lock``, ``_marks``, ``_records``, ``_root``, ``_seed_retry_timer``, ``_spawned`` and
+``_write_scheduled``, and write ``_cancel_epoch``, ``_dirty``,
 ``_seed_retry_timer`` and ``_write_scheduled``. New checkpoint work goes here.
 """
 
@@ -53,26 +53,27 @@ CHECKPOINT_NAME: Final[str] = "session-tree.json"
 #: why this is a bump rather than a key read additively: a file written before
 #: adoptions existed would load as "no session has ever been adopted", which looks
 #: exactly like the truth and is wrong.
-CHECKPOINT_VERSION: Final[int] = 5
+#: 6 replaced the scan caches (``scans``, ``spawn_scans``) with per-unit ``marks``.
+CHECKPOINT_VERSION: Final[int] = 6
 
 
-#: One unit's log identity for the scan cache: the directory's mtime, its segment count,
-#: and the newest segment's size and mtime. Named because it appears in the state, in the
-#: checkpoint and in two signatures, and four bare ints in a tuple say nothing at a call
-#: site about which four.
-ScanIdentity = tuple[int, int, int, int]
+#: One unit's watermark: where the last boot's read of its log stopped
+#: (:data:`~kiro_crew.crew_log.store_retention.TreeMark`). Named because it appears in
+#: the state, in the checkpoint and in signatures, and four bare ints say nothing at a
+#: call site about which four.
+ScanIdentity = tuple[int, int, int, int, int]
 
 #: What a checkpoint load yields, and what a tail replay yields on top of it. Aliased for
 #: the same reason: a five-place tuple in a signature is not readable at the call site.
 _LoadedCheckpoint = tuple[
     "dict[str, OpenedRecord]",
     "dict[tuple[str, str], EdgeRecord]",
-    "dict[str, ScanIdentity]",
     "dict[tuple[str, str], EdgeRecord]",
     "dict[str, ScanIdentity]",
 ]
 _ReplayResult = tuple[
     "dict[str, OpenedRecord]",
+    "dict[tuple[str, str], EdgeRecord]",
     "dict[tuple[str, str], EdgeRecord]",
     "dict[str, ScanIdentity]",
     bool,
@@ -366,14 +367,10 @@ def _debounced_write(
             "root": self._root or root or "",
             "records": [_record_to_json(r) for r in self._records.values()],
             "edges": [_edge_to_json(e) for e in self._edges.values()],
-            # The unit identities at which a complete read found NO decision, so the
-            # next boot can skip re-deriving that per unit. A cache, never evidence:
-            # see ``_scans``.
-            "scans": {sid: list(ident) for sid, ident in self._scans.items()},
-            # The creators' records of the sessions they created, and the unit
-            # identities those were read at (see ``_spawned``, ``_spawn_scans``).
+            # The creators' records of the sessions they created (see ``_spawned``).
             "spawned": [_edge_to_json(s) for s in self._spawned.values()],
-            "spawn_scans": {sid: list(ident) for sid, ident in self._spawn_scans.items()},
+            # Per unit, where the last boot's read of its log stopped (see ``_marks``).
+            "marks": {sid: list(mark) for sid, mark in self._marks.items()},
         }
         # Cleared BEFORE the write, and deliberately: an apply landing during it
         # re-dirties the state and arms another write, where clearing after would
@@ -403,14 +400,10 @@ def flush_checkpoint(self: SessionTreeProjection) -> bool:
             "root": self._root or _current_root(),
             "records": [_record_to_json(r) for r in self._records.values()],
             "edges": [_edge_to_json(e) for e in self._edges.values()],
-            # The unit identities at which a complete read found NO decision, so the
-            # next boot can skip re-deriving that per unit. A cache, never evidence:
-            # see ``_scans``.
-            "scans": {sid: list(ident) for sid, ident in self._scans.items()},
-            # The creators' records of the sessions they created, and the unit
-            # identities those were read at (see ``_spawned``, ``_spawn_scans``).
+            # The creators' records of the sessions they created (see ``_spawned``).
             "spawned": [_edge_to_json(s) for s in self._spawned.values()],
-            "spawn_scans": {sid: list(ident) for sid, ident in self._spawn_scans.items()},
+            # Per unit, where the last boot's read of its log stopped (see ``_marks``).
+            "marks": {sid: list(mark) for sid, mark in self._marks.items()},
         }
         self._dirty = False
         # Pinned from the SAME locked block that built the payload. Resolving it
@@ -425,8 +418,8 @@ def flush_checkpoint(self: SessionTreeProjection) -> bool:
 
 
 def _load_checkpoint() -> "_LoadedCheckpoint | None":
-    """The checkpoint's records, decisions and scan cache, or ``None`` when there is no
-    usable one.
+    """The checkpoint's records, decisions, spawns and marks, or ``None`` when there is
+    no usable one.
 
     ``None`` is every failure, undifferentiated on purpose: absent, unreadable,
     oversized, unparseable, wrong ``ver``, or a payload whose shape this does not
@@ -479,11 +472,11 @@ def _load_checkpoint() -> "_LoadedCheckpoint | None":
     if not isinstance(edge_rows, list):
         return None
     # Same reasoning as ``edges`` for the key having to be PRESENT, and the opposite
-    # reasoning for a malformed VALUE inside it: this one is a cache, so a row that does
-    # not parse is dropped and its unit is simply re-read, where dropping a decision row
-    # would change the tree.
-    scan_rows = payload.get("scans")
-    if not isinstance(scan_rows, dict):
+    # reasoning for a malformed VALUE inside it: a mark only saves a read, so a row that
+    # does not parse is dropped and its unit is simply read in full, where dropping a
+    # decision row would change the tree.
+    mark_rows = payload.get("marks")
+    if not isinstance(mark_rows, dict):
         return None
     records: dict[str, OpenedRecord] = {}
     for raw in rows:
@@ -493,8 +486,7 @@ def _load_checkpoint() -> "_LoadedCheckpoint | None":
     # Required for the reason ``edges`` is: a file missing it would load as "no
     # session recorded a child", which looks exactly like the truth.
     spawn_rows = payload.get("spawned")
-    spawn_scan_rows = payload.get("spawn_scans")
-    if not isinstance(spawn_rows, list) or not isinstance(spawn_scan_rows, dict):
+    if not isinstance(spawn_rows, list):
         return None
     edges: dict[tuple[str, str], EdgeRecord] = {}
     for raw in edge_rows:
@@ -506,21 +498,23 @@ def _load_checkpoint() -> "_LoadedCheckpoint | None":
         spawn = _edge_from_json(raw)
         if spawn is not None and spawn.parent_slot:
             spawned[(spawn.slot, spawn.sid)] = spawn
-    return records, edges, _scans_from_json(scan_rows), spawned, _scans_from_json(spawn_scan_rows)
+    return records, edges, spawned, _marks_from_json(mark_rows)
 
 
-def _scans_from_json(scan_rows: "dict[Any, Any]") -> "dict[str, ScanIdentity]":
-    """A scan-identity cache from the checkpoint. A row that does not parse is dropped,
-    which only costs its unit a re-read."""
+def _marks_from_json(mark_rows: "dict[Any, Any]") -> "dict[str, ScanIdentity]":
+    """The per-unit marks from the checkpoint. A row that does not parse is dropped,
+    which only costs its unit a full read."""
     scans: dict[str, ScanIdentity] = {}
-    for sid, raw in scan_rows.items():
+    for sid, raw in mark_rows.items():
         if not isinstance(sid, str) or not sid:
             continue
-        if not isinstance(raw, list) or len(raw) != 4:
+        if not isinstance(raw, list) or len(raw) != 5:
             continue
-        if not all(isinstance(part, int) and not isinstance(part, bool) for part in raw):
+        if not all(
+            isinstance(part, int) and not isinstance(part, bool) and part >= 0 for part in raw
+        ):
             continue
-        scans[sid] = (raw[0], raw[1], raw[2], raw[3])
+        scans[sid] = (raw[0], raw[1], raw[2], raw[3], raw[4])
     return scans
 
 
