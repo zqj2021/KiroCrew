@@ -23,7 +23,7 @@
  * and the alignment case below is the pin on that.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { render, fireEvent } from '@testing-library/react'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Provider } from 'react-redux'
 import { MemoryRouter } from 'react-router-dom'
@@ -728,7 +728,8 @@ describe('a filter that hides the folder\'s root', () => {
     expect(onSelectSlot).toHaveBeenCalledWith(LEAD)
     typeSearch(utils.container, 'fargate')
     // The three matching rows are on screen, the root is not, and nothing offers
-    // it: the search lane draws no folder header, so there is no folder menu.
+    // it: the search lane (drawn once the reply lands) has no folder header or menu.
+    await waitFor(() => expect(document.querySelector(`[data-testid="folder-menu-${LANE}"]`)).toBeNull())
     expect(cardOf(utils.container, MID)).not.toBeNull()
     expect(cardOf(utils.container, LEAD)).toBeNull()
     expect(document.querySelector(`[data-testid="folder-menu-${LANE}"]`)).toBeNull()
