@@ -6,6 +6,7 @@
  * new `query` prop replaces the edits.
  */
 import { useEffect, useRef, useState } from 'react'
+import { User, UserCheck } from 'lucide-react'
 import type { IssueQuery, IssueSummary } from '../../types'
 import ErrorNotice from '../../components/ErrorNotice'
 import SimpleSelect from '../../components/SimpleSelect'
@@ -88,12 +89,13 @@ function FilterBar({ filters, onChange }: { filters: Filters; onChange: FilterUp
         aria-label={i18nT('appSdk.issues.filter_assignee')}
         placeholder={i18nT('appSdk.issues.filter_assignee_placeholder')} onChange={e => setAssignee(e.target.value)} />
       <button type="button" aria-pressed={mine}
-        className={`h-7 shrink-0 cursor-pointer rounded-md border px-2 text-[12px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring ${mine ? 'border-accent bg-accent-subtle text-text' : 'border-border bg-transparent text-muted hover:text-text'}`}
+        className={`inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 rounded-full border px-2.5 text-[12px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring ${mine ? 'border-accent bg-accent-subtle text-text' : 'border-border bg-bg-elevated text-muted hover:text-text'}`}
         onClick={() => {
           const next = mine ? undefined : 'me'
           showAssignee(next ?? '')
           onChange(prev => ({ ...prev, assignee: next }))
         }}>
+        {mine ? <UserCheck size={13} aria-hidden="true" /> : <User size={13} aria-hidden="true" />}
         {i18nT('appSdk.issues.assigned_to_me')}
       </button>
       <input className={`${input} flex-[1_1_6rem]`} value={labels}
