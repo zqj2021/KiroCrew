@@ -756,7 +756,27 @@ def _url_payload_command(n: int) -> str:
 #: ``deny_gate`` forwards it behind a length-preserving guard. No matcher, rule,
 #: threshold or verdict moved -- the decision is byte-identical and the change is
 #: diagnostics-only. Re-measured.
-_PACKAGE_LINE_BUDGET = 35_311
+#: Raised by 134, to 35,445, for the ``self-protection-git-pager`` floor: a
+#: structural predicate refusing any git command that opens or configures a pager, its
+#: ungated-floor id, note and facade exports; a cheap git-absent gate plus an exception
+#: guard on the payload walk so a raising helper cannot escape ``is_denied``; and the
+#: package facade and ``argv_floor`` ``TYPE_CHECKING`` manifests restating
+#: ``_is_git_pager`` and the four pager helpers it forwards. Re-measured.
+#: Raised by 86 more, to 35,531, for the cross-review rework (TALOS Option A): the floor
+#: now parses ORIGINAL-case argv so ``-O`` (opens a pager) is told from ``-o`` (ordinary
+#: output) and a short-option cluster stops at an operand, and it refuses a pager route
+#: only when a program would actually run -- allowing an empty ``core.pager`` / ``GIT_PAGER``
+#: / ``PAGER``, a git-false ``pager.<cmd>``, and ``--no-pager`` / ``-P`` (never for
+#: ``grep -O``). Value-insensitivity is kept: any named program is still refused. Re-measured.
+#: Raised by 233 more, to 35,764, for the decider rework on the same floor: the arg scan
+#: now reads git's own grammar (git-global options before the subcommand, the subcommand's
+#: own grammar after -- so ``git grep -c`` / ``-e`` operands are not mis-read as git-global
+#: pager controls); ``cat`` joins the empty string as an allowed no-op pager value (owner
+#: ruling); and the floor steps over execution-prefix wrappers (``command`` / ``env`` /
+#: ``sudo`` / ``nice`` / ...), collects env a same-line ``export`` carries, refuses a
+#: ``git config core.pager <prog>`` writer, and widens the cheap gate so a ``git`` hidden
+#: behind an empty substitution still enters the walk. Re-measured.
+_PACKAGE_LINE_BUDGET = 35_764
 
 #: Ceiling on any ONE file in the package. This is what the bound is really for --
 #: a package total says nothing about a single file growing back into a second
