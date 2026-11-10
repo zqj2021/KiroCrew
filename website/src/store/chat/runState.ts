@@ -149,6 +149,9 @@ export const settleEndedBackgroundTurn = (state: ChatState, slot: string): void 
   const messages = state.slotMessages?.[key] ?? []
   const settled = ((state.slotRun ??= {})[key] ??= { state: 'idle' })
   setRunState(settled, 'idle')
+  // The turn a parked send was waiting on has ended, as `_done` clears the
+  // active slot's mark; the other background idle writers drop it too.
+  delete settled.pendingTurn
   syncOriginRun(state, slot, 'idle')
   finalizeTurnTranscript(messages)
   // A completed background turn is where this slot's array grows one assistant
@@ -224,7 +227,9 @@ export const settleEndedActiveTurn = (
  *  the mirror, so a busy entry parked here would keep the background pane's
  *  indicator on and its composer locked for a turn that never started. Such a
  *  send parks idle; its first frame (or a warm that finds it running)
- *  promotes the entry through the ordered writers.
+ *  promotes the entry through the ordered writers. Its mark parks with it
+ *  (`pendingTurn`) and comes back into `pendingTurnSlot` when the slot is
+ *  entered again, so the send stays guarded until the server confirms it.
  *
  *  Two `activeSlot` writers are deliberately NOT routed here, and leave no
  *  slot worth handing back to: `deleteSlot.fulfilled` (the outgoing slot was
@@ -245,6 +250,12 @@ export function enterActiveSlot(state: ChatState, target: string | null, automat
     const observed = mirrorState !== entryState
       || (state.runEpoch?.[safeKey(outgoing)] ?? 0) !== (state.activeRunEpochAtEntry ?? 0)
     if (observed) setRunState(runs[safeKey(outgoing)] ??= { state: 'idle' }, mirrorState)
+    if (unconfirmedSend) (runs[safeKey(outgoing)] ??= { state: 'idle' }).pendingTurn = true
+  }
+  if (outgoing !== target) {
+    const incoming = target !== null && !isUnsafeKey(target) ? state.slotRun?.[safeKey(target)] : undefined
+    state.pendingTurnSlot = incoming?.pendingTurn ? target : null
+    if (incoming) delete incoming.pendingTurn
   }
   // `'request'`: a create, fork or resume opening its session as it answers.
   if (outgoing !== target && automatic === 'request') state.activeSlotRequestMoves = (state.activeSlotRequestMoves ?? 0) + 1
@@ -264,14 +275,14 @@ export const runStateReducers = {
     // New Chat clears the selection here before `createSlot` lands, so this is
     // the last point at which the chat being left can be cached.
     if (action.payload !== state.activeSlot) parkActiveTranscript(state)
-    enterActiveSlot(state, action.payload); state.slotState = 'idle'; state.pendingTurnSlot = null
+    enterActiveSlot(state, action.payload); state.slotState = 'idle'
   },
   /** `setActiveSlot(null)` for the chat page itself, when its list no longer
    *  has the active chat (closed elsewhere, dropped by a frame, another mode).
    *  The user did not move, so it counts in `activeSlotAutoMoves`. */
   dropActiveSlot(state: ChatState) {
     if (state.activeSlot !== null) parkActiveTranscript(state)
-    enterActiveSlot(state, null, true); state.slotState = 'idle'; state.pendingTurnSlot = null
+    enterActiveSlot(state, null, true); state.slotState = 'idle'
   },
   /** A fork that may open its child started (`pendingForkOpens`). Every
    *  caller pairs it with exactly one `forkOpenSettled`, after its own
@@ -299,12 +310,17 @@ export const runStateReducers = {
   },
   /** Optimistically start a turn for `slot` after a local send. Marks it
    *  pending so the slots-sync won't clobber running=true before the server
-   *  catches up. Only the active slot drives the visible footer. */
+   *  catches up. Only the active slot drives the visible footer; a slot that
+   *  is not on screen keeps its mark on its run entry. */
   startLocalTurn(state: ChatState, action: PayloadAction<string>) {
     const slot = action.payload
-    state.pendingTurnSlot = slot
     bumpRunEpoch(state, slot)
-    if (slot === state.activeSlot) state.slotRunning = true
+    if (slot === state.activeSlot) {
+      state.pendingTurnSlot = slot
+      state.slotRunning = true
+    } else if (!isUnsafeKey(slot)) {
+      ((state.slotRun ??= {})[safeKey(slot)] ??= { state: 'idle' }).pendingTurn = true
+    }
   },
   /** A turn the gateway started on `slot` at this tab's request, with no
    *  transcript row to announce it (Mate's first greeting). Until its first
@@ -336,6 +352,7 @@ export const runStateReducers = {
   endLocalTurn(state: ChatState, action: PayloadAction<string>) {
     const slot = action.payload
     if (state.pendingTurnSlot === slot) state.pendingTurnSlot = null
+    if (!isUnsafeKey(slot)) delete state.slotRun?.[safeKey(slot)]?.pendingTurn
     if (slot === state.activeSlot) state.slotRunning = false
   },
   /** Reconcile the active slot's running state from a WS slots broadcast.
@@ -372,6 +389,7 @@ export const runStateReducers = {
       // nothing left to stop, whatever flag the cancel left behind.
       setRunState(run, 'idle')
       run.lastChunkSeq = undefined
+      delete run.pendingTurn
       syncOriginRun(state, slot, 'idle')
       // The `_done` this settlement stands in for would also have finalized
       // the trailing streaming row; a reply left as `streaming` hides its
@@ -430,6 +448,7 @@ export const runStateReducers = {
     if (!run || run.state === 'idle') return
     setRunState(run, 'idle')
     run.lastChunkSeq = undefined
+    delete run.pendingTurn
     syncOriginRun(state, slot, 'idle')
     // Stand-in for the `_done` that never came: finalize the trailing
     // streaming row as that frame would have (GPT round 3).

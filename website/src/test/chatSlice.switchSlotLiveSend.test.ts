@@ -209,3 +209,75 @@ describe('switchSlot.fulfilled leaves the run state of a send that landed while 
     expect(s.pendingTurnSlot).toBeNull()
   })
 })
+
+/**
+ * A send on chat A, then a switch to B and back to A while A's POST is still
+ * open (#34407). The unconfirmed-send guard belongs to A: leaving A parks it
+ * with A's run state, B's own page cannot clear it, and coming back to A
+ * brings back the bubble and the busy composer until the server confirms the
+ * send.
+ */
+describe('a send survives a switch away and back while its POST is open', () => {
+  const A = 'chat-a'
+  const B = 'chat-b'
+  const switchTo = (state: ReturnType<typeof init>, key: string, requestId: string) => {
+    const s = reducer(state, { type: 'chat/switchSlot/pending', meta: { arg: key, requestId, requestStatus: 'pending' } })
+    // Each page was read before A's send reached the server: empty and idle.
+    return reducer(s, {
+      type: 'chat/switchSlot/fulfilled',
+      meta: { arg: key, requestId, requestStatus: 'fulfilled' },
+      payload: { key, messages: [], running: false, hasMore: false, queue: [] },
+    })
+  }
+  const sendOnAThenVisitB = () => {
+    let s = switchTo(init(), A, 'r1')
+    s = reducer(s, appendMessage(user('hello from A', { sendId: 's-a' })))
+    s = reducer(s, startLocalTurn(A))
+    s = switchTo(s, B, 'r2')
+    expect(s.activeSlot).toBe(B)
+    expect(s.slotRunning).toBe(false)
+    return s
+  }
+
+  it('keeps the bubble and the busy composer on A', () => {
+    let s = sendOnAThenVisitB()
+    // A, seen from B, still has a send in flight: no Resume offer for it.
+    expect(selectContinuable({ chat: s, dashboard: { slots: [] } } as never, A)).toBe(false)
+
+    s = switchTo(s, A, 'r3')
+    expect(s.messages.map(m => m.content)).toEqual(['hello from A'])
+    expect(s.slotRunning).toBe(true)
+    expect(s.pendingTurnSlot).toBe(A)
+    expect(continuable(s)).toBe(false)
+
+    // The POST came back refused: A goes idle.
+    s = reducer(s, endLocalTurn(A))
+    expect(s.slotRunning).toBe(false)
+    expect(s.pendingTurnSlot).toBeNull()
+  })
+
+  it('comes back idle when the POST was refused while the user was on B', () => {
+    let s = sendOnAThenVisitB()
+    s = reducer(s, endLocalTurn(A))
+    s = switchTo(s, A, 'r3')
+    expect(s.slotRunning).toBe(false)
+    expect(s.pendingTurnSlot).toBeNull()
+  })
+
+  it('comes back idle when a server snapshot idled the started turn while the user was on B', () => {
+    let s = sendOnAThenVisitB()
+    s = reducer(s, sseChatMessage({ slot: A, role: 'chunk', content: 'Hi', seq: 1 }))
+    s = reducer(s, syncSlotRunningFromServer({ slot: A, running: false, stopping: false }))
+    s = reducer(s, { type: 'chat/switchSlot/pending', meta: { arg: A, requestId: 'r3', requestStatus: 'pending' } })
+    expect(s.slotRunning).toBe(false)
+    expect(s.pendingTurnSlot).toBeNull()
+  })
+
+  it('comes back idle when the turn ended while the user was on B', () => {
+    let s = sendOnAThenVisitB()
+    s = reducer(s, sseChatMessage({ slot: A, role: '_done', content: '' }))
+    s = reducer(s, { type: 'chat/switchSlot/pending', meta: { arg: A, requestId: 'r3', requestStatus: 'pending' } })
+    expect(s.slotRunning).toBe(false)
+    expect(s.pendingTurnSlot).toBeNull()
+  })
+})
