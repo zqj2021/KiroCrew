@@ -10516,6 +10516,8 @@
         "bridge_approvals": "Send pending approvals to chat apps",
         "bridge_approvals_desc": "When a tool approval opens, {{productName}} sends a note about it to the chat apps the notification bridge delivers to. The dashboard bell does not ring for it, and the note has no buttons yet, so answer the approval in the dashboard.",
         "bridge_approvals_desc_summary": "Tells a connected chat app when a tool needs approval.",
+        "secrets_vault": "Secrets vault redesign",
+        "secrets_vault_desc": "Shows Secrets as a list beside the open item, and lets you save logins and notes.",
         "crew_mode": "Ultra Mode",
         "crew_mode_desc": "Lets a chat hand tasks to a crew and track them on a Board.",
         "crew_mode_desc_summary": "Hands a chat's tasks to a crew.",
