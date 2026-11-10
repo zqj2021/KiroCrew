@@ -253,6 +253,15 @@ def _slot_is_trusted(slot: Any) -> bool:
     scope = str(getattr(slot, "_trust_scope", "") or "")
     if not scope:
         return False
+    from kiro_crew.dashboard.approval_posture import REMOTE_TRUST_SCOPE_PREFIX
+
+    if scope.startswith(REMOTE_TRUST_SCOPE_PREFIX):
+        # A hub conductor's Trust carried to this worker stands in for Trust, so the
+        # ceiling's ``trust`` verdict masks it on every approval, as at arming.
+        from kiro_crew.approval_mode_policy import session_mode_permitted
+
+        if not session_mode_permitted("trust"):
+            return False
     return bool(safety_override().is_scope_active(scope))
 
 

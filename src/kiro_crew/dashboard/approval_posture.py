@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+#: The ``_trust_scope`` prefix of a hub conductor's Trust carried to its bound worker
+#: on this crew (rfc-conductor-remote-dispatch §4). It stands in for Trust, so the
+#: ceiling's ``trust`` verdict masks it wherever it is honoured.
+REMOTE_TRUST_SCOPE_PREFIX = "remote-dispatch:"
+
 
 def trust_reaches_subagents(slot: Any) -> bool:
     """Whether *slot*'s ``_trust`` covers the subagents it spawns.
