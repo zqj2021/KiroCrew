@@ -5,30 +5,51 @@
 import { PREVIEW_ARTIFACT_DEPLOY } from '../../utils/previewFlags'
 import type { UiLocationArea } from '../types'
 
+/** Search terms for starting a blank document, shared by the desktop Doc tile
+ *  and the phone's New artifact button: each viewport draws one of them. */
+const NEW_DOC_TERMS = {
+  en: ['new document', 'create a document', 'blank document', 'new doc', 'create an artifact', 'write a document'],
+  'zh-CN': ['新建文档', '创建文档', '空白文档', '新文档', '创建产物'],
+  ja: ['新しいドキュメント', 'ドキュメントを作成'],
+  ko: ['새 문서', '문서 만들기'],
+  es: ['nuevo documento', 'crear un documento'],
+  fr: ['nouveau document', 'créer un document'],
+  de: ['neues Dokument', 'Dokument erstellen'],
+  pt: ['novo documento', 'criar um documento'],
+  it: ['nuovo documento', 'creare un documento'],
+  ru: ['новый документ', 'создать документ'],
+}
+
 export const LOCATIONS = {
-  // The labelled half of the header's split button. Its children are a
-  // spinner-or-icon expression plus the label, so the key is named.
+  // The quick-create row's Doc tile (desktop). Its children are an icon tile
+  // plus the label, so the key is named. A phone draws a split button instead
+  // (`artifacts.new-mobile`).
   'artifacts.new': {
     kind: 'button',
-    label: { from: 'text', key: 'pages.artifactsPage.new_artifact' },
-    aliasKeys: ['pages.artifactsPage.start_a_new_blank_document_in_the_library'],
-    terms: {
-      en: ['new document', 'create a document', 'blank document', 'new doc', 'create an artifact', 'write a document'],
-      'zh-CN': ['新建文档', '创建文档', '空白文档', '新文档', '创建产物'],
-      ja: ['新しいドキュメント', 'ドキュメントを作成'],
-      ko: ['새 문서', '문서 만들기'],
-      es: ['nuevo documento', 'crear un documento'],
-      fr: ['nouveau document', 'créer un document'],
-      de: ['neues Dokument', 'Dokument erstellen'],
-      pt: ['novo documento', 'criar um documento'],
-      it: ['nuovo documento', 'creare un documento'],
-      ru: ['новый документ', 'создать документ'],
-    },
-    placements: [{ surface: 'artifacts', parent: 'page.artifacts', entry: 'toolbar' }],
+    label: { from: 'text', key: 'pages.artifactsPage.quick_doc' },
+    aliasKeys: ['pages.artifactsPage.start_a_new_blank_document_in_the_library', 'pages.artifactsPage.new_artifact'],
+    terms: NEW_DOC_TERMS,
+    placements: [{
+      surface: 'artifacts', parent: 'page.artifacts', entry: 'toolbar',
+      requires: [{ kind: 'viewport', value: 'desktop' }],
+    }],
   },
-  // The split button's caret. Its accessible name depends on the viewport: on
-  // a phone the same menu also holds New folder and reads "More actions". Only
-  // the desktop name is registered, so the phone placement is not indexed.
+  // A phone's New artifact: the labelled half of its split button, where the
+  // desktop's Doc tile (`artifacts.new`) is not drawn. Its own id because one
+  // id names one render site. The hover tooltip is an alias of the desktop
+  // tile only, so that name binds to one control rather than two.
+  'artifacts.new-mobile': {
+    kind: 'button',
+    label: { from: 'text', key: 'pages.artifactsPage.new_artifact' },
+    terms: NEW_DOC_TERMS,
+    placements: [{
+      surface: 'artifacts', parent: 'page.artifacts', entry: 'toolbar',
+      requires: [{ kind: 'viewport', value: 'mobile' }],
+    }],
+  },
+  // The quick-create row's "more ways to add" trigger, beside the Doc and
+  // Folder tiles (desktop). A phone's split-button caret reads "More actions"
+  // and is not registered.
   'artifacts.add-menu': {
     kind: 'button',
     label: { from: 'attr', attr: 'aria-label', key: 'pages.artifactsPage.more_ways_to_add_an_artifact' },
@@ -64,24 +85,21 @@ export const LOCATIONS = {
     },
     placements: [{ surface: 'artifacts', parent: 'page.artifacts', entry: 'toolbar' }],
   },
-  // The desktop toolbar's New folder. On a phone it moves into the add menu,
-  // whose phone name ("More actions") is not registered, so that copy is not
-  // indexed.
+  // New folder in the quick-create row's more-ways-to-add menu (desktop). On a
+  // phone it sits in the split button's "More actions" menu, which is not
+  // registered, so that copy is not indexed.
   'artifacts.new-folder': {
-    kind: 'button',
+    kind: 'menu-item',
     aliasKeys: ['pages.artifactsPage.create_a_folder_to_organize_your_artifacts'],
     terms: {
       en: ['make an artifact folder', 'create an artifact folder', 'new artifact folder', 'organize my artifacts', 'organize my documents'],
       'zh-CN': ['新建产物文件夹', '产物文件夹', '整理产物'],
     },
-    placements: [{
-      surface: 'artifacts', parent: 'page.artifacts', entry: 'toolbar',
-      requires: [{ kind: 'viewport', value: 'desktop' }],
-    }],
+    placements: [{ surface: 'artifacts', parent: 'artifacts.add-menu', entry: 'menu' }],
   },
   // The desktop toolbar's link to the Artifact Deploy console, behind its
   // preview flag. On a phone it moves into the add menu, whose phone name is
-  // not registered (see artifacts.add-menu), so that copy is not indexed.
+  // not registered, so that copy is not indexed.
   'artifacts.deploy': {
     kind: 'button',
     label: { from: 'text', key: 'pages.artifactsPage.artifact_deploy' },

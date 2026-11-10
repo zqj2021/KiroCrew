@@ -101,8 +101,8 @@ _EXPECTED: dict[str, tuple[list[str], list[str], str, list[str], str | None]] = 
         "desktop",
     ),
     "artifacts.new-folder": (
-        ["Artifacts", "New folder"],
-        ["产物", "新建文件夹"],
+        ["Artifacts", "More ways to add an artifact", "New folder"],
+        ["产物", "添加产物的更多方式", "新建文件夹"],
         "/artifacts",
         [],
         "desktop",

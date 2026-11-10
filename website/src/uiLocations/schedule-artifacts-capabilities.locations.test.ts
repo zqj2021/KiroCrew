@@ -69,9 +69,9 @@ const EXPECTED: Record<string, Expect> = {
     placement: { surface: 'artifacts', route: '/artifacts', parents: ['page.artifacts'], entry: 'toolbar', requires: [] },
   },
   'artifacts.new-folder': {
-    kind: 'button', labelKey: 'pages.artifactsPage.new_folder',
+    kind: 'menu-item', labelKey: 'pages.artifactsPage.new_folder',
     aliasKeys: ['pages.artifactsPage.create_a_folder_to_organize_your_artifacts'], source: ARTIFACTS_SRC,
-    placement: { surface: 'artifacts', route: '/artifacts', parents: ['page.artifacts'], entry: 'toolbar', requires: [{ kind: 'viewport', value: 'desktop' }] },
+    placement: { surface: 'artifacts', route: '/artifacts', parents: ['page.artifacts', 'artifacts.add-menu'], entry: 'menu', requires: [{ kind: 'viewport', value: 'desktop' }] },
   },
   'artifacts.deploy': {
     kind: 'button', labelKey: 'pages.artifactsPage.artifact_deploy',

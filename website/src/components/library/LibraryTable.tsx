@@ -47,6 +47,17 @@ export const KIND_BADGE: Record<Artifact['kind'], 'ok' | 'err' | 'warn' | 'aim'>
   dashboard: 'aim',
 }
 
+/** An artifact's kind as a small pill, sized to sit beside 11-13px row text
+ *  rather than above it. The library table, the masonry and the card grid all
+ *  draw the kind through this. */
+export function KindPill({ kind }: { kind: Artifact['kind'] }) {
+  return (
+    <Badge variant={KIND_BADGE[kind]} className="text-[10.5px] leading-4 px-1.5 py-0 font-sans">
+      {kind}
+    </Badge>
+  )
+}
+
 export function isoToTs(iso: string): number {
   if (!iso) return 0
   const t = Date.parse(iso)
@@ -498,7 +509,7 @@ export function ArtifactRow({ a, onOpen, onDelete, deletingSlug, onTogglePin, pi
             <code className="text-[12px] text-muted">{a.slug}</code>
           </td>
           <td className="px-2.5 py-2 border-b border-border">
-            <Badge variant={KIND_BADGE[a.kind]}>{a.kind}</Badge>
+            <KindPill kind={a.kind} />
           </td>
           <td className="px-2.5 py-2 border-b border-border text-[12px] text-muted truncate max-w-[180px]" title={a.session_title || a.source}>{a.session_title || a.source}</td>
           <td className="px-2.5 py-2 border-b border-border text-sm text-muted">{i18nT('pages.artifactsPage.v')}{a.version}</td>
