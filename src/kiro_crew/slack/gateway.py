@@ -257,7 +257,7 @@ from kiro_crew.executors import (
     subprocess_executor,
 )
 from kiro_crew.frontend import build_frontend_async
-from kiro_crew.gateway_restart import resolve_restart_launcher, supervisor_reentry
+from kiro_crew.gateway_restart import resolve_restart_launcher
 from kiro_crew.gateway_shutdown_budget import (
     GRACEFUL_SHUTDOWN_SECS,
     PERSISTENCE_DRAIN_GRACE_SECS,
@@ -814,14 +814,7 @@ class GatewayOrchestrator:
     _update_check_task: "asyncio.Task[None] | None"
     _profile_watch_task: "asyncio.Task[None] | None"
     _update_apply_deferred: bool
-    _restart_gate_hold: "asyncio.Task[None] | None"
     _update_pause_holder: str | None
-    _pending_update_respawn: Callable[[], str] | None
-    _pending_update_mandatory: bool
-    _pending_update_mandatory_key: str
-    _pending_update_version: str
-    _mandatory_update_deferred_at: float | None
-    _mandatory_update_deferred_key: str | None
     _wheel_update_noticed: set[str]
     _mcp_gateway_manager: GatewayManager | None
     # A manager whose start failed, held while ``_mcp_gateway_start_retry``
@@ -1125,11 +1118,6 @@ class GatewayOrchestrator:
     # Auto-update
     # ------------------------------------------------------------------
 
-    @update_ownership.owning(update_ownership.Step.RESTART)
-    async def _restart_after_update(self, respawn: Callable[[], str]) -> None:
-        """Restart into an applied update, owning the restart step while it runs."""
-        await GatewayOrchestrator._restart_after_update_body(self, respawn)
-
     # gateway_runtime/install_repair.py
     _DEP_INSTALL_TIMEOUT_SECS = _install._DEP_INSTALL_TIMEOUT_SECS
     _KIRO_CLI_VERSION_TIMEOUT_SECS = _install._KIRO_CLI_VERSION_TIMEOUT_SECS
@@ -1146,28 +1134,17 @@ class GatewayOrchestrator:
     _live_update_handler_tasks = _upd_sched._live_update_handler_tasks
     _drain_update_callback_work = _upd_sched._drain_update_callback_work
     _UPDATE_BUSY_RETRY_SECS = _upd_sched._UPDATE_BUSY_RETRY_SECS
-    _MANDATORY_UPDATE_MAX_DEFER_SECS = _upd_sched._MANDATORY_UPDATE_MAX_DEFER_SECS
     _UPDATE_DRAIN_TIMEOUT_SECS = _upd_sched._UPDATE_DRAIN_TIMEOUT_SECS
-    _prepare_auto_update_apply = _upd_sched._prepare_auto_update_apply
     _finish_auto_update_apply = _upd_sched._finish_auto_update_apply
-    _RESTART_GATE_HOLD_SECS = _upd_sched._RESTART_GATE_HOLD_SECS
-    _restart_gate_when_idle = _upd_sched._restart_gate_when_idle
-    _restart_gate_held = _upd_sched._restart_gate_held
-    _release_restart_gate_hold = _upd_sched._release_restart_gate_hold
     _wheel_apply_module = staticmethod(_upd_sched._wheel_apply_module)
-    _dashboard_policy_applies = staticmethod(_upd_sched._dashboard_policy_applies)
     _settle_update_work = _upd_sched._settle_update_work
     _run_update_checks = _upd_sched._run_update_checks
-    _retry_pending_update_restart = _upd_sched._retry_pending_update_restart
     _check_for_updates = _upd_sched._check_for_updates
     _auto_update_effect = _upd_sched._auto_update_effect
     _publish_provider_update_state = _upd_sched._publish_provider_update_state
     _check_for_updates_via_provider = _upd_sched._check_for_updates_via_provider
-    _restart_after_update_claimed = _upd_sched._restart_after_update_claimed
     _check_for_updates_legacy = _upd_sched._check_for_updates_legacy
-    _restart_after_update_body = _upd_sched._restart_after_update_body
     # gateway_runtime/update_apply.py
-    _auto_apply_update = _upd_apply._auto_apply_update
     _auto_apply_wheel_update = _upd_apply._auto_apply_wheel_update
     _notice_wheel_update_once = _upd_apply._notice_wheel_update_once
 
