@@ -421,6 +421,8 @@ export interface McpServer {
   url?: string
   /** Header names are preserved, but read responses redact every value. */
   headers?: Record<string, string>
+  /** The public OAuth client id the entry's own `oauth` block names, if any. */
+  clientId?: string
   status: string; error?: string; tools?: string[]
   source: string; enabled: boolean; disabledTools?: string[]
   /** How status/tools were established: "handshake" (real spawn + tools/list)

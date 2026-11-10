@@ -94,8 +94,7 @@ def withhold_oauth(
     count = len(oauth) if isinstance(oauth, dict) else 0
     logger.info(
         "agent %r: MCP server %r declares an oauth block (%d keys), which this "
-        "backend discards, so its sign-in cannot work here; the kiro-cli "
-        "backend supports it.",
+        "backend discards, so its sign-in cannot work here.",
         agent_id,
         name,
         count,

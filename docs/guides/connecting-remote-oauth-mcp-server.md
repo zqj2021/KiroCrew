@@ -210,6 +210,11 @@ server an agent or a session added, or one of yours whose URL was changed
 outside the dashboard, keeps the chat guidance until you save it again from the
 dashboard.
 
+A server you set up with its own OAuth client (an `oauth` block with a
+`clientId`) cannot sign in on the Kiro Agent harness, which does not accept that
+block. Its row reads **Sign-in unavailable** and says so. A new chat on Kiro
+Agent says the same in a notice that stays at the top of the chat.
+
 ## Complete the browser flow and select a team/tenant
 
 Follow the **Authorize** link into a browser and complete the provider's consent
