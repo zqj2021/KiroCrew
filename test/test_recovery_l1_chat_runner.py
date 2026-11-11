@@ -41,7 +41,12 @@ from recovery_l1_chat_runner_helpers import (
 from kiro_crew.acp.client import AcpClient, AcpError
 from kiro_crew.acp.session_handle import AcpSessionHandle
 from kiro_crew.acp.session_provider import AcpSessionProvider
-from kiro_crew.acp.types import EVENT_COMPLETE, EVENT_TEXT_CHUNK, JsonRpcMessage
+from kiro_crew.acp.types import (
+    EVENT_COMPLETE,
+    EVENT_STEER_CONSUMED,
+    EVENT_TEXT_CHUNK,
+    JsonRpcMessage,
+)
 from kiro_crew.dashboard import chat_runner
 from kiro_crew.dashboard import session_health as sh
 from kiro_crew.dashboard.chat import _run_chat
@@ -1400,3 +1405,104 @@ class TestTheRunnerCallSitesChargeTheFailedCycle:
         assert svc.charges == [
             ("chat-1-wake-recovery", "loop-ledger", 3)
         ], "the wake's recovery died uncharged, so its loop never retries the wake"
+
+    @pytest.mark.asyncio
+    async def test_a_turn_that_took_a_steered_wake_charges_its_loop_when_it_dies(
+        self, tmp_path
+    ) -> None:
+        """A person's turn takes a work-ledger wake steered into it, then dies. The
+        turn is not the loop's own, so unless taking the wake makes it the loop's
+        cycle, nothing charges the loop and the wake's one retry never comes.
+        """
+        state, client = _l1_state(tmp_path)
+        client.last_infra_error = None
+        slot = _RecordingSlot("chat-1-steered-wake")
+        wake = "[work-ledger wake] item=it_1 status=question"
+
+        def _stream(_message, *_a, **_kw):
+            async def _gen():
+                yield LLMEvent(kind=EVENT_TEXT_CHUNK, text="fixing the login bug ")
+                slot._pending_steers.append(wake)
+                slot._steer_automation[wake] = {
+                    "cycle": 2,
+                    "loop_id": "loop-ledger",
+                    "generation": 3,
+                }
+                yield LLMEvent(
+                    kind=EVENT_STEER_CONSUMED, text=f"<user_message>\n{wake}\n</user_message>"
+                )
+                raise RuntimeError("the model session died mid-turn")
+
+            return _gen()
+
+        client.stream = MagicMock(side_effect=_stream)
+        svc = _RecordingNudgeSvc()
+        with (
+            patch("kiro_crew.dashboard.chat.sel") as mock_sel,
+            patch("kiro_crew.autonudge.get_instance", return_value=svc),
+        ):
+            mock_sel.return_value = MagicMock()
+            await _run_chat(state, slot, "fix the login bug")
+            if slot.task:
+                await slot.task
+        assert slot._pending_steers == [], "the turn never took the steered wake"
+        assert svc.charges == [
+            ("chat-1-steered-wake", "loop-ledger", 3)
+        ], "the turn that carried the wake died uncharged, so its loop never retries it"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("steer_loop_id", "expected_charge"),
+        [("loop-ledger", ("loop-ledger", 4)), ("loop-other", ("loop-other", 4))],
+        ids=["same-loop-newer-generation", "replacing-loop"],
+    )
+    async def test_a_loop_cycle_that_took_a_steered_wake_charges_the_right_cycle(
+        self, tmp_path, steer_loop_id, expected_charge
+    ) -> None:
+        """A loop's own cycle at generation 3 takes a steered wake, then dies.
+
+        The loop's instruction changed while the cycle ran, so a wake of the same loop
+        carries generation 4; a charge under 3 is discarded as stale and the wake gets
+        no retry. A slot holds one loop, so a wake of another loop means the cycle's
+        loop was replaced, and the charge goes to the live one.
+        """
+        state, client = _l1_state(tmp_path)
+        client.last_infra_error = None
+        slot = _RecordingSlot("chat-1-steered-cycle")
+        wake = "[work-ledger wake] item=it_2 status=question"
+
+        def _stream(_message, *_a, **_kw):
+            async def _gen():
+                yield LLMEvent(kind=EVENT_TEXT_CHUNK, text="reading the ledger ")
+                slot._pending_steers.append(wake)
+                slot._steer_automation[wake] = {
+                    "cycle": 2,
+                    "loop_id": steer_loop_id,
+                    "generation": 4,
+                }
+                yield LLMEvent(
+                    kind=EVENT_STEER_CONSUMED, text=f"<user_message>\n{wake}\n</user_message>"
+                )
+                raise RuntimeError("the model session died mid-turn")
+
+            return _gen()
+
+        client.stream = MagicMock(side_effect=_stream)
+        svc = _RecordingNudgeSvc()
+        with (
+            patch("kiro_crew.dashboard.chat.sel") as mock_sel,
+            patch("kiro_crew.autonudge.get_instance", return_value=svc),
+        ):
+            mock_sel.return_value = MagicMock()
+            await _run_chat(
+                state,
+                slot,
+                "[work-ledger wake] item=it_1 status=question",
+                _directive_self_wake=True,
+                _directive_loop_id="loop-ledger",
+                _directive_loop_gen=3,
+            )
+            if slot.task:
+                await slot.task
+        assert slot._pending_steers == [], "the turn never took the steered wake"
+        assert svc.charges == [("chat-1-steered-cycle", *expected_charge)]
