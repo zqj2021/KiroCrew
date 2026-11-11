@@ -1265,9 +1265,9 @@ Slack `file_share` messages are processed in `_route_message()` after dedup + au
 
 ### Text / Code Files (`files.py`)
 - **Mimetypes**: `text/*`, `application/json`, `application/xml`, `application/javascript`
-- **Size limit**: 512 KB download cap, 50 KB injection cap (truncated with `[… truncated]` marker)
-- **Flow**: Download to temp → read with `errors="replace"` → redact credentials/URLs → inject as `[File: name]\ncontent\n[End of file]`
-- **Temp lifecycle**: Always cleaned in `finally` block (text content is read into memory, file not needed after)
+- **Size limit**: 512 KB download cap, 50 KB injection cap (a cut ends with `[… truncated: N of M characters of text shown]`)
+- **Flow**: Download to temp → read with `errors="replace"` → redact credentials/URLs → inject as `[File: name]\ncontent\n[End of file]`; a cut file (or document text) is rewritten in place with its whole redacted text, renamed to `.txt` and returned among the attachment paths, named by a `[Its whole text is in <path> until this turn ends]` line
+- **Temp lifecycle**: a file that fits is cleaned in the `finally` block (its content is read into memory); a cut file's `.txt` copy follows the opaque-file lifecycle below
 
 ### Opaque Files
 - **Mimetypes**: `video/*` and every format not handled as inlineable image, text/code, document, or audio; this includes ZIP, binary payloads, SVG, and TIFF

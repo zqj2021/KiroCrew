@@ -313,7 +313,87 @@ class TestIngestAttachments:
             source="test",
             limits=IngestLimits(max_text_inject=100),
         )
+        cleanup(result.temp_paths)
         assert "truncated" in result.text_blocks[0]
+
+    @pytest.mark.parametrize(
+        "name,mimetype",
+        [("n.csv", "text/csv"), ("r.pdf", "application/pdf")],
+        ids=["text", "document"],
+    )
+    async def test_a_cut_attachment_hands_over_its_whole_redacted_text(
+        self, monkeypatch, name, mimetype
+    ):
+        """The prompt keeps the first 100 characters, as before, and says how many
+        there were; the agent's tools get ALL of them -- redacted, never the raw
+        download -- in a .txt that the caller deletes with the turn's temp paths."""
+        secret = "ghp_" + "a" * 36
+        text = "x" * 150 + f"\ntoken={secret}\n" + "tail " * 400
+        monkeypatch.setattr(attachments, "extract_text", lambda path, **_: text)
+        result = await ingest_attachments(
+            [Attachment(name=name, mimetype=mimetype, size=len(text), url="u")],
+            download=_writer(text.encode()),
+            source="test",
+            limits=IngestLimits(max_text_inject=100),
+        )
+        try:
+            [kept] = result.file_paths
+            with open(kept, encoding="utf-8") as fh:
+                whole = fh.read()
+            block = result.text_blocks[0]
+            assert kept.endswith(".txt") and kept in result.temp_paths
+            assert whole.endswith("tail " * 400) and secret not in whole
+            assert (
+                f"\n{whole[:100]}\n[… truncated: 100 of {len(whole)} characters of text shown]\n"
+                in block
+            )
+            assert f"[Its whole text is in {kept} until this turn ends]" in block
+        finally:
+            cleanup(result.temp_paths)
+
+    async def test_a_copy_that_cannot_be_stored_leaves_the_marker_alone(self, monkeypatch):
+        """The copy is extra: failing to make it never costs the inline part."""
+        dests: list[str] = []
+
+        async def _download(url: str, dest: str) -> None:
+            dests.append(dest)
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write("z" * 500)
+
+        def _fail(path: str, text: str) -> None:
+            raise UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogate")
+
+        monkeypatch.setattr(attachments, "_rewrite_text", _fail)
+        result = await ingest_attachments(
+            [Attachment(name="n.txt", mimetype="text/plain", size=500, url="u")],
+            download=_download,
+            source="test",
+            limits=IngestLimits(max_text_inject=100),
+        )
+        assert result.rejections == [] and result.file_paths == []
+        assert result.text_blocks == [
+            "[File: n.txt]\n" + "z" * 100 + "\n[… truncated: 100 of 500 characters of text shown]"
+            "\n[End of file]"
+        ]
+        assert not os.path.exists(dests[0])
+
+    async def test_the_rewrite_never_recreates_a_download_already_deleted(self, tmp_path):
+        """A cancelled turn unlinks the download while the worker may still be
+        about to write it; the write must fail, not bring the file back."""
+        gone = tmp_path / "gone.txt"
+        with pytest.raises(FileNotFoundError):
+            attachments._rewrite_text(str(gone), "text")
+        assert not gone.exists()
+
+    async def test_an_attachment_that_fits_is_inlined_whole_and_nothing_is_kept(self):
+        result = await ingest_attachments(
+            [Attachment(name="n.txt", mimetype="text/plain", size=100, url="u")],
+            download=_writer(b"y" * 100),
+            source="test",
+            limits=IngestLimits(max_text_inject=100),
+        )
+        assert result.text_blocks == ["[File: n.txt]\n" + "y" * 100 + "\n[End of file]"]
+        assert result.temp_paths == []
 
     @pytest.mark.parametrize(
         "name,mimetype,suffix,payload",
@@ -652,7 +732,7 @@ class TestBlockingWorkLeavesTheEventLoop:
         observed: list[int] = []
         real_reader = attachments._read_text_file
 
-        def _spy(path: str, limit: int) -> str:
+        def _spy(path: str, limit: int) -> tuple[str, str]:
             observed.append(threading.get_ident())
             return real_reader(path, limit)
 
@@ -697,7 +777,7 @@ class TestBlockingWorkLeavesTheEventLoop:
         """
         real_reader = attachments._read_text_file
 
-        def _slow_read(path: str, limit: int) -> str:
+        def _slow_read(path: str, limit: int) -> tuple[str, str]:
             time.sleep(0.15)  # blocking, as a large/slow filesystem read would be
             return real_reader(path, limit)
 
