@@ -8230,7 +8230,9 @@
         "chat_stopped_unrecovered_body": "チャットが停止し、復旧できませんでした。チャットを開いて新しいチャットを開始してください。",
         "chat_stopped_busy_body": "チャットが使用中のままで、復旧できませんでした。チャットを開いて新しいチャットを開始してください。",
         "chat_stopped_refused_body": "モデルが回答を拒否したため、チャットが停止しました。チャットを開いて理由を確認してください。",
-        "chat_stopped_stalled_body": "チャットが停滞し、復旧できませんでした。チャットを開いて新しいチャットを開始してください。"
+        "chat_stopped_stalled_body": "チャットが停滞し、復旧できませんでした。チャットを開いて新しいチャットを開始してください。",
+        "bot_limits_held_title": "Bot が一部の操作の前に確認するようになりました",
+        "bot_limits_held_body": "{{name}} に設定した制限の一部をそのまま適用できなかったため、その制限に関わる操作の前にあなたに確認します。Bot を開いて権限を確認してください。"
       },
       "notificationBanner": {
         "dismiss_notification": "通知を閉じる",

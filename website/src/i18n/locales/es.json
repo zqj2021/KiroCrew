@@ -8642,7 +8642,9 @@
         "chat_stopped_unrecovered_body": "El chat se detuvo y no pudo recuperarse. Abre el chat para iniciar uno nuevo.",
         "chat_stopped_busy_body": "El chat siguió ocupado y no pudo recuperarse. Abre el chat para iniciar uno nuevo.",
         "chat_stopped_refused_body": "El modelo se negó a responder y el chat se detuvo. Abre el chat para ver por qué.",
-        "chat_stopped_stalled_body": "El chat se atascó y no pudo recuperarse. Abre el chat para iniciar uno nuevo."
+        "chat_stopped_stalled_body": "El chat se atascó y no pudo recuperarse. Abre el chat para iniciar uno nuevo.",
+        "bot_limits_held_title": "Un Bot ahora pregunta antes de algunas acciones",
+        "bot_limits_held_body": "Algunos límites de {{name}} no se pudieron aplicar tal como estaban, así que te pregunta antes de las acciones que cubren. Abre el Bot para revisar sus permisos."
       },
       "notificationBanner": {
         "dismiss_notification": "Descartar notificación",

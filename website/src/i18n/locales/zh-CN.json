@@ -8230,7 +8230,9 @@
         "chat_stopped_unrecovered_body": "聊天已停止且无法恢复。请打开聊天，开始新的聊天。",
         "chat_stopped_busy_body": "聊天一直处于忙碌状态，无法恢复。请打开聊天，开始新的聊天。",
         "chat_stopped_refused_body": "模型拒绝回答，聊天已停止。请打开聊天查看原因。",
-        "chat_stopped_stalled_body": "聊天已停滞且无法恢复。请打开聊天，开始新的聊天。"
+        "chat_stopped_stalled_body": "聊天已停滞且无法恢复。请打开聊天，开始新的聊天。",
+        "bot_limits_held_title": "有个 Bot 现在会先问你再做某些操作",
+        "bot_limits_held_body": "为 {{name}} 设置的部分限制无法按原样生效，所以它在做这些限制涉及的操作前会先问你。打开这个 Bot 查看它的权限。"
       },
       "notificationBanner": {
         "dismiss_notification": "关闭通知",

@@ -8642,7 +8642,9 @@
         "chat_stopped_unrecovered_body": "O chat parou e não conseguiu se recuperar. Abra o chat para iniciar um novo.",
         "chat_stopped_busy_body": "O chat continuou ocupado e não conseguiu se recuperar. Abra o chat para iniciar um novo.",
         "chat_stopped_refused_body": "O modelo se recusou a responder e o chat parou. Abra o chat para ver o motivo.",
-        "chat_stopped_stalled_body": "O chat travou e não conseguiu se recuperar. Abra o chat para iniciar um novo."
+        "chat_stopped_stalled_body": "O chat travou e não conseguiu se recuperar. Abra o chat para iniciar um novo.",
+        "bot_limits_held_title": "Um Bot agora pergunta antes de algumas ações",
+        "bot_limits_held_body": "Alguns limites de {{name}} não puderam ser aplicados como estavam, então ele pergunta a você antes das ações que eles cobrem. Abra o Bot para revisar as permissões dele."
       },
       "notificationBanner": {
         "dismiss_notification": "Dispensar notificação",

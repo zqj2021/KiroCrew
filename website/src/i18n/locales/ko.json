@@ -8230,7 +8230,9 @@
         "chat_stopped_unrecovered_body": "채팅이 중지되었고 복구할 수 없었습니다. 채팅을 열어 새 채팅을 시작하세요.",
         "chat_stopped_busy_body": "채팅이 계속 사용 중이어서 복구할 수 없었습니다. 채팅을 열어 새 채팅을 시작하세요.",
         "chat_stopped_refused_body": "모델이 답변을 거부해 채팅이 중지되었습니다. 채팅을 열어 이유를 확인하세요.",
-        "chat_stopped_stalled_body": "채팅이 멈춘 뒤 복구할 수 없었습니다. 채팅을 열어 새 채팅을 시작하세요."
+        "chat_stopped_stalled_body": "채팅이 멈춘 뒤 복구할 수 없었습니다. 채팅을 열어 새 채팅을 시작하세요.",
+        "bot_limits_held_title": "Bot이 이제 일부 작업 전에 먼저 묻습니다",
+        "bot_limits_held_body": "{{name}}에 설정한 제한 일부를 그대로 적용할 수 없어서, 그 제한에 해당하는 작업 전에 먼저 물어봅니다. Bot을 열어 권한을 확인하세요."
       },
       "notificationBanner": {
         "dismiss_notification": "알림 닫기",

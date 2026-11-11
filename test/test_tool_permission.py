@@ -646,6 +646,28 @@ async def test_grants_are_walked_in_order_and_the_first_admitted_hit_answers():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("held", [True, False])
+async def test_a_held_bot_limit_skips_every_grant_and_asks_the_person(monkeypatch, held):
+    """A call under a moved Bot's held limit (``mate_held_rules``) is never answered by a grant."""
+    from kiro_crew import mate_held_rules
+
+    monkeypatch.setattr(mate_held_rules, "held_for", lambda *a, **k: ["deny shell"] if held else [])
+    log: list = []
+    policy = _policy(
+        log,
+        gate=Judges(log, Hit("hook_auto_approve", Evidence.IDENTITY)),
+        grants=(GATE_GRANT, Offers(log, "parent", Hit("parent_policy_auto", Evidence.NONE))),
+        responders=(Scripted(log, "callback", False),),
+    )
+    settled = await settle(Ask(_event(), RecordingWire(log), "k"), policy)
+    if held:
+        assert ("ask", "callback", "Run: ls -la") in log
+        assert settled.outcome != "auto_approved"
+    else:
+        assert settled == Settled("auto_approved", "hook_auto_approve", "rule")
+
+
+@pytest.mark.asyncio
 async def test_a_refused_program_name_downgrades_to_the_next_stage(names):
     names.verdicts["Run: ls -la"] = _SHADOWED
     log: list = []

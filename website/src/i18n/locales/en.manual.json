@@ -3224,7 +3224,9 @@
         "chat_stopped_unrecovered_body": "The chat stopped and could not recover. Open the chat to start a new one.",
         "chat_stopped_busy_body": "The chat stayed busy and could not recover. Open the chat to start a new one.",
         "chat_stopped_refused_body": "The model declined to answer and the chat stopped. Open the chat to see why.",
-        "chat_stopped_stalled_body": "The chat stalled and could not recover. Open the chat to start a new one."
+        "chat_stopped_stalled_body": "The chat stalled and could not recover. Open the chat to start a new one.",
+        "bot_limits_held_title": "A Bot now asks before some actions",
+        "bot_limits_held_body": "Some limits set for {{name}} could not be applied as written, so it asks you before the actions they cover. Open the Bot to review its permissions."
       },
       "notificationBanner": {
         "dismiss_notification": "Dismiss notification",
