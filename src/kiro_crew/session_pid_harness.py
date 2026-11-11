@@ -93,6 +93,7 @@ _MANAGED_AGENT_BASENAMES: frozenset[bytes] = frozenset(
         "claude",
         "kiro-cli-chat",
         "agy_acp_server.par",
+        "kirocrew-antigravity-acp",
     }
 )
 
@@ -416,6 +417,13 @@ def _harness_naming_tokens(cmdline: bytes) -> list[bytes]:
         _basename_of(tokens[0]) in _HARNESS_INTERPRETERS
         and len(tokens) > 1
         and not tokens[1].startswith(b"-")
+    ):
+        naming.append(tokens[1])
+    elif (
+        _basename_of(tokens[0]).lower().startswith(_LAUNCHER_INTERPRETER_NAME_PREFIX)
+        and len(tokens) > 1
+        and _basename_of(tokens[1])
+        in (b"kirocrew-antigravity-acp", b"kirocrew-antigravity-acp.exe")
     ):
         naming.append(tokens[1])
     return naming

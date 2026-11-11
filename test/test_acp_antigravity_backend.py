@@ -135,11 +135,9 @@ def test_antigravity_mirror_and_auth_are_declared() -> None:
     assert declaration.adapter_own_leaves == declaration.credential_leaves
     assert ".gemini/antigravity-acp/settings.json" not in declaration.credential_leaves
     assert "oauth-personal" in declaration.sign_in_remedy
-    # The backend card renders this sentence in every install state, so it names the pin.
-    assert (
-        f"verifies Google Antigravity ACP {ANTIGRAVITY_VERIFIED_VERSION} only"
-        in declaration.sign_in_remedy
-    )
+    assert "GEMINI_API_KEY" in declaration.sign_in_remedy
+    assert "google-antigravity" in declaration.sign_in_remedy
+    assert ANTIGRAVITY_VERIFIED_VERSION in declaration.sign_in_remedy
 
 
 def test_two_file_antigravity_install_resolves_only_as_a_pair(
@@ -194,8 +192,7 @@ def test_antigravity_install_probe_names_the_missing_helper(
     assert state.installed == backend_install.MISSING
     assert state.missing_components == ("localharness_external",)
     assert "1.4.4" in (state.install_command or "")
-    assert "verifies Google Antigravity ACP 1.4.4 only" in (state.install_command or "")
-    assert "refuses other versions" in (state.install_command or "")
+    assert "pip install google-antigravity" in (state.install_command or "")
 
 
 def test_antigravity_probe_does_not_replace_the_spawn_cache(
@@ -337,25 +334,39 @@ async def test_antigravity_stops_on_a_forbidden_mode(mode: str) -> None:
     client._kill_process.assert_awaited_once_with(force=True)
 
 
-def test_antigravity_refuses_an_unverified_runtime_version() -> None:
+def test_antigravity_refuses_an_unverified_runtime_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _refuse_unverified_antigravity_version(_client())
-    with pytest.raises(AcpToolGateUnroutable, match="not the version") as refused:
-        _refuse_unverified_antigravity_version(_client("1.4.5"))
+    _refuse_unverified_antigravity_version(_client("sdk-0.1.23"))
+    _refuse_unverified_antigravity_version(_client("1.4.5"))
+
+    # Major mismatch or empty version is always refused.
+    with pytest.raises(
+        AcpToolGateUnroutable, match="not a supported or verified version"
+    ) as refused:
+        _refuse_unverified_antigravity_version(_client("2.0.0"))
     message = str(refused.value)
     assert ANTIGRAVITY_VERIFIED_VERSION in message
     assert "https://dl.google.com/agy-extensions/releases/" in message
+    assert "pip install google-antigravity" in message
     assert "agentclientprotocol.com/registry" not in message
-    assert "Kiro Crew verifies Google Antigravity ACP 1.4.4 only" in message
-    assert "refuses other versions" in message
+
+    # Strict pin mode refuses standalone 1.4.5 while still accepting sdk-* and 1.4.4.
+    monkeypatch.setenv("ANTIGRAVITY_STRICT_VERSION_PIN", "1")
+    _refuse_unverified_antigravity_version(_client("1.4.4"))
+    _refuse_unverified_antigravity_version(_client("sdk-0.1.23"))
+    with pytest.raises(AcpToolGateUnroutable, match="not a supported or verified version"):
+        _refuse_unverified_antigravity_version(_client("1.4.5"))
 
 
 @pytest.mark.asyncio
 async def test_antigravity_pin_is_enforced_where_the_mode_is_armed() -> None:
-    client = _client("1.4.5")
+    client = _client("2.0.0")
     client._acp_config_options = [_mode_option()]
     client.set_config_option = AsyncMock(return_value={})
 
-    with pytest.raises(AcpToolGateUnroutable, match="not the version"):
+    with pytest.raises(AcpToolGateUnroutable, match="not a supported or verified version"):
         await client._apply_session_permission_routing()
 
     client.set_config_option.assert_not_awaited()
@@ -1484,3 +1495,415 @@ def test_other_backends_gain_no_unreadable_mark_from_the_antigravity_channel(
     event = client._build_permission_event(_titled_ask("call-big"))
     assert event is not None
     assert event.mcp_identity_unreadable is False
+
+
+# ── Python SDK ACP Adapter & Dual-Mode Runtime Tests ──
+
+
+def test_antigravity_auto_resolves_python_sdk_when_standalone_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdk_bin = tmp_path / antigravity_mod.ANTIGRAVITY_SDK_ADAPTER_BIN
+    sdk_helper = tmp_path / antigravity_mod.ANTIGRAVITY_SDK_HARNESS_BIN
+    for item in (sdk_bin, sdk_helper):
+        item.write_bytes(b"#!/bin/sh\n")
+        item.chmod(0o700)
+
+    monkeypatch.delenv(ANTIGRAVITY_ACP_BIN_ENV, raising=False)
+    monkeypatch.delenv(ANTIGRAVITY_HARNESS_PATH_ENV, raising=False)
+    monkeypatch.delenv(antigravity_mod.ANTIGRAVITY_ACP_MODE_ENV, raising=False)
+    monkeypatch.setattr(antigravity_mod, "_find_main_executable", lambda _e, _p: None)
+    monkeypatch.setattr(antigravity_mod, "_find_helper", lambda _e, _s, _p: None)
+    monkeypatch.setattr(antigravity_mod, "_find_sdk_adapter_executable", lambda _p: str(sdk_bin))
+    monkeypatch.setattr(antigravity_mod, "_find_sdk_bundled_helper", lambda _e: str(sdk_helper))
+    _cold_resolution_cache(monkeypatch)
+    forget_antigravity_resolution()
+
+    resolution = resolve_antigravity_runtime()
+    assert resolution.mode == "sdk"
+    assert resolution.server == str(sdk_bin)
+    assert resolution.helper == str(sdk_helper)
+
+
+@pytest.mark.asyncio
+async def test_antigravity_sdk_spawn_plan_sets_label_and_localharness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolution = AntigravityResolution(
+        server=str(tmp_path / "kirocrew-antigravity-acp"),
+        helper=str(tmp_path / "localharness"),
+        search_path=str(tmp_path),
+        mode="sdk",
+    )
+    monkeypatch.setattr(
+        "kiro_crew.acp.harness.antigravity.resolve_antigravity_runtime",
+        lambda **_kwargs: resolution,
+    )
+    preflight = AsyncMock(return_value=("/hidden/credential-home",))
+    monkeypatch.setattr(launch_mod, "_run_preflight_bounded", preflight)
+    session = SimpleNamespace(_prepare_session_mcp=AsyncMock())
+    ctx = SpawnContext(
+        agent="kirocrew",
+        work_dir=tmp_path,
+        model=None,
+        environ={},
+        home=tmp_path,
+        sandbox_mode="standard",
+        session=session,
+    )
+
+    adapter = AntigravityLaunch()
+    plan = await adapter.resolve_spawn(ctx)
+    env: dict[str, str] = {}
+    adapter.apply_spawn_env(env)
+
+    assert plan.argv == [resolution.server]
+    assert plan.spawn_label == "kirocrew-antigravity-acp"
+    assert plan.stderr_label == "kirocrew-antigravity-acp"
+    assert env[ANTIGRAVITY_HARNESS_PATH_ENV] == resolution.helper
+
+
+def test_sdk_workspace_read_confinement_rule(tmp_path: Path) -> None:
+    from kiro_crew.acp.adapters.antigravity_sdk import _read_call_stays_in_workspace
+
+    readme = tmp_path / "README.md"
+    readme.write_text("ok", encoding="utf-8")
+    ssh_dir = tmp_path / ".ssh"
+    ssh_dir.mkdir()
+    ssh_key = ssh_dir / "id_rsa"
+    ssh_key.write_text("secret", encoding="utf-8")
+
+    assert _read_call_stays_in_workspace({"path": str(readme)}, str(tmp_path)) is True
+    assert _read_call_stays_in_workspace({"path": "README.md"}, str(tmp_path)) is True
+    assert _read_call_stays_in_workspace({"path": "/etc/passwd"}, str(tmp_path)) is False
+    assert _read_call_stays_in_workspace({"path": "../outside.txt"}, str(tmp_path)) is False
+    assert _read_call_stays_in_workspace({"path": str(ssh_key)}, str(tmp_path)) is False
+
+
+def test_sdk_builds_real_google_antigravity_agent_config(tmp_path: Path) -> None:
+    pytest.importorskip("google.antigravity")
+    from kiro_crew.acp.adapters.antigravity_sdk import AntigravitySdkAcpServer, _SdkSessionState
+
+    server = AntigravitySdkAcpServer(
+        env={"GEMINI_API_KEY": "test-dummy-key", "GEMINI_HOME": str(tmp_path)}
+    )
+    session = _SdkSessionState(
+        session_id="antigravity-sdk-test123",
+        cwd=str(tmp_path),
+        model_id="gemini-2.5-pro",
+        thinking_level="medium",
+        mcp_servers_raw=[
+            {
+                "name": "crew-stdio",
+                "command": "/usr/bin/env",
+                "args": ["echo", "ok"],
+                "env": [{"name": "FOO", "value": "bar"}],
+            },
+            {
+                "name": "crew-http",
+                "type": "http",
+                "url": "http://127.0.0.1:9999/mcp",
+                "headers": [{"name": "Authorization", "value": "Bearer tok"}],
+            },
+        ],
+    )
+
+    async def dummy_ask(_tc: object, _reason: str = "") -> bool:
+        return True
+
+    cm = server._build_sdk_conversation_cm(session, dummy_ask)
+    assert cm is not None
+
+
+@pytest.mark.asyncio
+async def test_sdk_acp_server_pre_tool_permission_gate_allows_and_denies(tmp_path: Path) -> None:
+    import asyncio
+
+    from kiro_crew.acp._dispatch_parts.tool_call_identity import harness_tool_name
+    from kiro_crew.acp.adapters.antigravity_sdk import AntigravitySdkAcpServer
+
+    sent_frames: list[dict] = []
+    client_decision = {"optionId": "allow"}
+    executed_tools: list[str] = []
+
+    server_ref: list[AntigravitySdkAcpServer] = []
+
+    async def capture_line(line: str) -> None:
+        frame = json.loads(line)
+        sent_frames.append(frame)
+        if frame.get("method") == "session/request_permission":
+            resp = {
+                "jsonrpc": "2.0",
+                "id": frame["id"],
+                "result": {
+                    "outcome": {
+                        "outcome": "selected",
+                        "optionId": client_decision["optionId"],
+                    }
+                },
+            }
+            await server_ref[0].handle_raw_line(json.dumps(resp))
+
+    def fake_strategy_factory(session: object, approval_handler: object):
+        class FakeConv:
+            connection = SimpleNamespace(cumulative_usage=SimpleNamespace(total_token_count=4096))
+
+            async def send(self, _payload: object) -> None:
+                return None
+
+            async def receive_steps(self):
+                shell_tc = SimpleNamespace(
+                    step_id="step-shell",
+                    name="run_command",
+                    server_name="",
+                    args={"CommandLine": "printf hello"},
+                )
+                if await approval_handler(shell_tc, "policy"):
+                    executed_tools.append("run_command")
+                    yield SimpleNamespace(
+                        id="step-shell",
+                        source="STEP_SOURCE_SYSTEM",
+                        target="STEP_TARGET_MODEL",
+                        status="STEP_STATUS_DONE",
+                        tool_calls=[shell_tc],
+                        content="hello",
+                    )
+
+                edit_tc = SimpleNamespace(
+                    step_id="step-edit",
+                    name="edit_file",
+                    server_name="",
+                    args={"path": str(tmp_path / "a.py")},
+                )
+                if await approval_handler(edit_tc, "policy"):
+                    executed_tools.append("edit_file")
+                    yield SimpleNamespace(
+                        id="step-edit",
+                        source="STEP_SOURCE_SYSTEM",
+                        target="STEP_TARGET_MODEL",
+                        status="STEP_STATUS_DONE",
+                        tool_calls=[edit_tc],
+                        content="edited",
+                    )
+
+                mcp_tc = SimpleNamespace(
+                    step_id="step-mcp",
+                    name="marker",
+                    server_name="probe",
+                    args={"k": "v"},
+                )
+                if await approval_handler(mcp_tc, "policy"):
+                    executed_tools.append("probe:marker")
+                    yield SimpleNamespace(
+                        id="step-mcp",
+                        source="STEP_SOURCE_SYSTEM",
+                        target="STEP_TARGET_MODEL",
+                        status="STEP_STATUS_DONE",
+                        tool_calls=[mcp_tc],
+                        content="mcp-ok",
+                    )
+
+                yield SimpleNamespace(
+                    id="step-reply",
+                    source="STEP_SOURCE_MODEL",
+                    target="STEP_TARGET_USER",
+                    status="STEP_STATUS_DONE",
+                    thinking_delta="thinking...",
+                    content_delta="All done!",
+                    tool_calls=[],
+                )
+
+        class FakeCM:
+            async def __aenter__(self):
+                return FakeConv()
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        return FakeCM()
+
+    # 1) Unauthenticated session/new fails with signed_out_signature.
+    unauth_frames: list[dict] = []
+
+    async def capture_unauth(line: str) -> None:
+        unauth_frames.append(json.loads(line))
+
+    unauth_server = AntigravitySdkAcpServer(send_line=capture_unauth, env={})
+    await unauth_server.handle_raw_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": str(tmp_path)}}
+        )
+    )
+    await asyncio.gather(*list(unauth_server._in_flight_tasks))
+    assert "No authentication method selected" in unauth_frames[0]["error"]["message"]
+
+    # 2) Authenticated session: initialize -> session/new -> allow turn -> deny turn.
+    server = AntigravitySdkAcpServer(
+        send_line=capture_line,
+        strategy_factory=fake_strategy_factory,
+        env={"GEMINI_API_KEY": "fake-key", "GEMINI_HOME": str(tmp_path)},
+    )
+    server_ref.append(server)
+
+    await server.handle_raw_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}}
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    init_res = next(f["result"] for f in sent_frames if f.get("id") == 1)
+    assert init_res["protocolVersion"] == 1
+    assert init_res["agentInfo"]["version"].startswith("sdk-")
+
+    await server.handle_raw_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 2, "method": "session/new", "params": {"cwd": str(tmp_path)}}
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    new_res = next(f["result"] for f in sent_frames if f.get("id") == 2)
+    sid = new_res["sessionId"]
+
+    await server.handle_raw_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session/prompt",
+                "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "go"}]},
+            }
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+
+    assert executed_tools == ["run_command", "edit_file", "probe:marker"]
+    prompt_res = next(f["result"] for f in sent_frames if f.get("id") == 3)
+    assert prompt_res["stopReason"] == "end_turn"
+
+    updates = [f["params"]["update"] for f in sent_frames if f.get("method") == "session/update"]
+    tool_calls = [u for u in updates if u.get("sessionUpdate") == "tool_call"]
+    assert len(tool_calls) == 3
+    assert tool_calls[0]["kind"] == "execute"
+    assert tool_calls[0]["rawInput"]["CommandLine"] == "printf hello"
+    assert harness_tool_name(tool_calls[1], backend=ACP_BACKEND_ANTIGRAVITY) == "edit_file"
+    assert tool_calls[2]["_meta"]["mcp"] == {"server": "probe", "tool": "marker"}
+    assert any(
+        u.get("sessionUpdate") == "usage_update" and u.get("size") == 1_048_576 for u in updates
+    )
+
+    # Now test DENY: tools must be blocked BEFORE execution!
+    executed_tools.clear()
+    sent_frames.clear()
+    client_decision["optionId"] = "deny"
+
+    await server.handle_raw_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "session/prompt",
+                "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "try deny"}]},
+            }
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    assert executed_tools == []
+    deny_updates = [
+        f["params"]["update"] for f in sent_frames if f.get("method") == "session/update"
+    ]
+    assert any(
+        u.get("sessionUpdate") == "tool_call_update" and u.get("status") == "failed"
+        for u in deny_updates
+    )
+    await server.close_all()
+
+
+@pytest.mark.asyncio
+async def test_live_subprocess_kirocrew_antigravity_acp_handshake(tmp_path: Path) -> None:
+    import asyncio
+    import sys
+
+    wrapper = Path(sys.executable).with_name(antigravity_mod.ANTIGRAVITY_SDK_ADAPTER_BIN)
+    assert wrapper.exists(), f"Expected console script {wrapper}"
+
+    env = dict(os.environ)
+    env["GEMINI_API_KEY"] = "test-stdio-key"
+    env["GEMINI_HOME"] = str(tmp_path)
+
+    proc = await asyncio.create_subprocess_exec(
+        str(wrapper),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        env=env,
+    )
+    assert proc.stdin is not None and proc.stdout is not None
+    try:
+        proc.stdin.write(
+            (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"protocolVersion": 1},
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await proc.stdin.drain()
+        line1 = json.loads((await asyncio.wait_for(proc.stdout.readline(), timeout=5)).decode())
+        assert line1["result"]["protocolVersion"] == 1
+        assert line1["result"]["agentInfo"]["version"].startswith("sdk-")
+
+        proc.stdin.write(
+            (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "session/new",
+                        "params": {"cwd": str(tmp_path)},
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await proc.stdin.drain()
+        line2 = json.loads((await asyncio.wait_for(proc.stdout.readline(), timeout=5)).decode())
+        sid = line2["result"]["sessionId"]
+
+        proc.stdin.write(
+            (
+                json.dumps(
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "session/prompt",
+                        "params": {
+                            "sessionId": sid,
+                            "prompt": [{"type": "text", "text": "/usage"}],
+                        },
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
+        await proc.stdin.drain()
+        seen_end = False
+        for _ in range(5):
+            msg = json.loads((await asyncio.wait_for(proc.stdout.readline(), timeout=5)).decode())
+            if msg.get("id") == 3:
+                assert msg["result"]["stopReason"] == "end_turn"
+                seen_end = True
+                break
+        assert seen_end
+
+        proc.stdin.close()
+        rc = await asyncio.wait_for(proc.wait(), timeout=5)
+        assert rc == 0
+    finally:
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()

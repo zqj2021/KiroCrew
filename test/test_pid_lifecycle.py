@@ -1247,6 +1247,31 @@ class TestReclaimOwnsEveryHarnessItTracked:
 
         assert sp._is_managed_agent_process(4242) is True
 
+    def test_a_python_antigravity_sdk_adapter_is_recognised_without_widening_python(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``python3.12 .../kirocrew-antigravity-acp`` matches, while generic ``python ...`` does not."""
+        import kiro_crew.session_pid as sp
+
+        assert (
+            sp._cmdline_names_a_harness(
+                b"/opt/venv/bin/python3.12\x00/opt/venv/bin/kirocrew-antigravity-acp"
+            )
+            is True
+        )
+        assert sp._cmdline_names_a_harness(b"/opt/venv/bin/kirocrew-antigravity-acp") is True
+        assert sp._cmdline_names_a_harness(b"/opt/venv/bin/python3.12\x00/tmp/app.py") is False
+        assert (
+            sp._cmdline_names_a_harness(b"/opt/venv/bin/python3.12\x00/opt/venv/bin/kiro-cli")
+            is False
+        )
+        monkeypatch.setattr(
+            sp,
+            "_pid_cmdline",
+            lambda pid, proc_root=None: b"/opt/venv/bin/python3.12\x00/opt/venv/bin/kirocrew-antigravity-acp\x00",
+        )
+        assert sp._is_managed_agent_process(4242) is True
+
     def test_a_windows_antigravity_runtime_is_a_managed_agent_process(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
