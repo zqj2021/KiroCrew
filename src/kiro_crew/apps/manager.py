@@ -236,6 +236,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _validate_source_path,
         copy_app_tree_as_installed,
         gateway_data_dir_obstruction,
+        is_uncopied_name,
         preserved_data_awaits,
     )
     from kiro_crew.apps.manager_uninstall import (  # noqa: F401

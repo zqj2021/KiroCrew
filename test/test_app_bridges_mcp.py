@@ -1099,7 +1099,9 @@ class TestUnreadableManifestIsNotASilentRegistration:
         import kiro_crew.apps.bridges as brmod
 
         monkeypatch.setattr(brmod, "_registration_source", lambda n: (None, brmod.Path(".")))
-        monkeypatch.setattr(brmod, "_registration_denied", lambda name, action, app_root: None)
+        monkeypatch.setattr(
+            brmod, "_registration_denied", lambda name, action, app_root, manifest=None: None
+        )
 
         collected: list[str] = []
         assert brmod.reregister_app_mcp_servers("app", io_failures=collected) == []
@@ -1114,7 +1116,9 @@ class TestUnreadableManifestIsNotASilentRegistration:
             "_registration_source",
             lambda n: (SimpleNamespace(mcpServers={}, agents=[]), brmod.Path(".")),
         )
-        monkeypatch.setattr(brmod, "_registration_denied", lambda name, action, app_root: None)
+        monkeypatch.setattr(
+            brmod, "_registration_denied", lambda name, action, app_root, manifest=None: None
+        )
 
         collected: list[str] = []
         assert brmod.reregister_app_mcp_servers("app", io_failures=collected) == []
@@ -1133,7 +1137,9 @@ class TestScrubDoesNotRematerializeAgents:
 
         manifest = SimpleNamespace(mcpServers={"srv": {"command": "x"}}, agents=["a.json"])
         monkeypatch.setattr(brmod, "_registration_source", lambda n: (manifest, brmod.Path(".")))
-        monkeypatch.setattr(brmod, "_registration_denied", lambda name, action, app_root: None)
+        monkeypatch.setattr(
+            brmod, "_registration_denied", lambda name, action, app_root, manifest=None: None
+        )
         monkeypatch.setattr(
             brmod,
             "_register_mcp_servers",
@@ -1154,7 +1160,9 @@ class TestScrubDoesNotRematerializeAgents:
 
         manifest = SimpleNamespace(mcpServers={"srv": {"command": "x"}}, agents=[])
         monkeypatch.setattr(brmod, "_registration_source", lambda n: (manifest, brmod.Path(".")))
-        monkeypatch.setattr(brmod, "_registration_denied", lambda name, action, app_root: "revoked")
+        monkeypatch.setattr(
+            brmod, "_registration_denied", lambda name, action, app_root, manifest=None: "revoked"
+        )
         removed: list[str] = []
         monkeypatch.setattr(brmod, "_deregister_mcp_servers", lambda n: (removed.append(n), 1)[1])
         monkeypatch.setattr(

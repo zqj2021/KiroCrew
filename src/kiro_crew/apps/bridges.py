@@ -97,6 +97,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _changed_manifest_keys,
         _clip,
         _cron_defs_from_manifest,
+        _cron_restore_denied,
         _deregister_crons,
         _field_digest,
         _join_stamp,
@@ -239,6 +240,9 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
         skill_live_loaders,
     )
     from kiro_crew.apps import deps_boot as _deps_boot_module  # noqa: F401
+    from kiro_crew.apps.admission import (  # noqa: F401
+        installed_content_refusal as _installed_content_refusal,
+    )
     from kiro_crew.apps.agent_template_values import (  # noqa: F401
         HOST_PLACEHOLDERS,
         host_placeholder_values,
@@ -272,6 +276,9 @@ if TYPE_CHECKING:  # names it serves from outside the family, from their homes
         has_stdio_mcp_server,
         is_module_style_entry_point,
         screen_app_path,
+    )
+    from kiro_crew.apps.signed_imports import (  # noqa: F401
+        pycache_prefix_env as _pycache_prefix_env,
     )
     from kiro_crew.atomic_write import (  # noqa: F401
         atomic_write,
