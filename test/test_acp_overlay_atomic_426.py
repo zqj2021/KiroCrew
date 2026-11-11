@@ -68,15 +68,19 @@ def test_overlay_that_fails_to_read_is_left_whole(tmp_path, write):
     data["chat.defaultModel"] = "claude-opus-5"
     cli.write_text(json.dumps(data), encoding="utf-8")
     before = cli.read_bytes()
-    real_open = Path.open
+    real_read = acp_mod.safe_read_file_bytes_nolink
 
-    def _unreadable(self, *args, **kwargs):
-        if self.name == "cli.json":
+    def _unreadable(raw, *args, **kwargs):
+        if Path(raw).name == "cli.json":
             raise PermissionError("cli.json is unreadable")
-        return real_open(self, *args, **kwargs)
+        return real_read(raw, *args, **kwargs)
+
+    def _unreadable_pinned(_settings_fd, _cli_json):
+        raise PermissionError("cli.json is unreadable")
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(Path, "open", _unreadable)
+        mp.setattr(acp_mod, "safe_read_file_bytes_nolink", _unreadable)
+        mp.setattr(acp_mod, "_read_pinned_cli_json", _unreadable_pinned)
         with pytest.raises(PermissionError):
             write(tmp_path)
     assert cli.read_bytes() == before
