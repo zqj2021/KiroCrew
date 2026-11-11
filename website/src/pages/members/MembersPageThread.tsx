@@ -580,6 +580,8 @@ interface MembersPageThreadColumnProps {
   setPostCreateError: Dispatch<SetStateAction<PostCreateFailure | null>>
   postCreateDismissable: boolean
   createHeld: string | null
+  /** Import from file is the owner's (a relay teammate's view). */
+  importHeld: boolean
   threadOutcome: MemberThreadOutcome | undefined
   slotsLoaded: boolean
   active: MemberRosterRow | undefined
@@ -593,7 +595,7 @@ export function MembersPageThreadColumn({
   rosterRead, crewEditing, teamsRead, layout, profileCard, drawers, rosterView, thread, sidePanel, threadView,
   rosterSignals, profileFlight, navigation, teamView, navigate, location, activeName, setSearchParams,
   editingCrew, profile, gone, openCreate, openAdvanced, openQuick, threadColumnRef, postCreateError,
-  setPostCreateError, postCreateDismissable, createHeld, threadOutcome, slotsLoaded, active, leftCreateFailure,
+  setPostCreateError, postCreateDismissable, createHeld, importHeld, threadOutcome, slotsLoaded, active, leftCreateFailure,
   setLeftCreateFailure, retryPostCreate,
 }: MembersPageThreadColumnProps) {
   const { t } = useTranslation()
@@ -716,7 +718,7 @@ export function MembersPageThreadColumn({
                 team view too: a team can exist before its first crewmate does,
                 and the pane is the team's then. */}
             {!active && !activeTeam && !postCreateError && loaded && !loadError && hasNoCrewmates(members) && (
-              <CrewmateEmptyHero onCreate={openQuick} onAdvanced={openAdvanced} held={createHeld} onImport={() => setImporting(true)} />
+              <CrewmateEmptyHero onCreate={openQuick} onAdvanced={openAdvanced} held={createHeld} onImport={importHeld ? undefined : () => setImporting(true)} />
             )}
             {importing && <CrewmateImportDialog open onOpenChange={setImporting} />}
             {/* A failed roster read at md and up: the roster column shows its own
@@ -821,7 +823,7 @@ export function MembersPageThreadColumn({
                   thread={thread} threadView={threadView} rosterSignals={rosterSignals}
                   profileFlight={profileFlight} navigation={navigation} navigate={navigate} location={location}
                   setSearchParams={setSearchParams} profile={profile} openQuick={openQuick}
-                  createHeld={createHeld} active={active}
+                  createHeld={createHeld} importHeld={importHeld} active={active}
                 />
                 {/* Everything that can sit between the header and the pane —
                     notices, the greeting cards — stays in flow and is padded
