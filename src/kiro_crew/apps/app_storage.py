@@ -10,6 +10,7 @@ Values are JSON-serializable dicts or strings.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import logging
@@ -105,6 +106,20 @@ def _encode_key(key: str) -> str:
     return _DIGEST_STEM_PREFIX + digest
 
 
+def _holds_file(path: Path) -> bool:
+    """``path.is_file()``, False for a name too long for the filesystem to hold.
+
+    A long key's digest file is short, but its legacy own-name location can be past
+    the filename limit; ``is_file`` raises ENAMETOOLONG for it rather than False.
+    """
+    try:
+        return path.is_file()
+    except OSError as exc:
+        if exc.errno == errno.ENAMETOOLONG:
+            return False
+        raise
+
+
 def _decode_stem(stem: str) -> str:
     """The key a percent-encoded or plain filename stem carries.
 
@@ -159,10 +174,10 @@ class AppStorage:
         regular file, so ``get("con")`` never opens the console.
         """
         path = self._key_path(key)
-        if path.is_file():
+        if _holds_file(path):
             return self._read(path, enveloped=_is_digest_stem(path.stem))
         fallback = self._unencoded_key_path(key)
-        if fallback is None or fallback == path or not fallback.is_file():
+        if fallback is None or fallback == path or not _holds_file(fallback):
             return None
         # Written under the key's own name by a build without the encoding, so
         # the file holds the bare value however this key encodes now.
@@ -223,12 +238,14 @@ class AppStorage:
             try:
                 superseded.unlink(missing_ok=True)
             except OSError as exc:
-                logger.warning(
-                    "AppStorage[%s] could not remove the superseded %s: %s",
-                    self._app_name,
-                    superseded.name,
-                    exc,
-                )
+                # A name past the filename limit can hold no copy to remove.
+                if exc.errno != errno.ENAMETOOLONG:
+                    logger.warning(
+                        "AppStorage[%s] could not remove the superseded %s: %s",
+                        self._app_name,
+                        superseded.name,
+                        exc,
+                    )
         sel().log_api_access(
             caller=f"app:{self._app_name}",
             operation="app_storage.set",
@@ -249,7 +266,7 @@ class AppStorage:
             paths.append(fallback)
         removed = False
         for path in paths:
-            if not path.is_file():
+            if not _holds_file(path):
                 continue
             try:
                 path.unlink()
