@@ -259,6 +259,28 @@ describe('Decisions (Jev) preview card', () => {
     expect(decisionsSwitch().getAttribute('aria-disabled')).toBe('true')
   })
 
+  it('names a refused hosted default and does not draw the switch as active', async () => {
+    // The gateway reports `active: "none"` for the hosted default a ceiling refuses,
+    // while `configured_endpoint` still names the hosted address. The card must not
+    // present that address as where messages go.
+    stubGateway({ enabled: true })
+    vi.spyOn(api, 'system').mockResolvedValue({ mem_total_gb: 16 } as never)
+    vi.spyOn(api, 'getDecisionsProvider').mockResolvedValue({
+      presets: [], active: 'none', loopback: false,
+      configured_endpoint: 'https://api.example/v1/systemone', hosted_permitted: false,
+    } as never)
+    renderSection()
+    await waitFor(() => {
+      expect(screen.getByText(/policy blocks Jev/)).toBeInTheDocument()
+    })
+    expect(screen.queryByText(/No decision model is chosen/)).toBeNull()
+    expect(decisionsSwitch().getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByText(/^Sent to/)).toBeNull()
+    expect(screen.queryByText(/sent over the internet to Jev/i)).toBeNull()
+    expect(screen.queryByText('https://api.example/v1/systemone')).toBeNull()
+    expect(decisionsSwitch().getAttribute('aria-disabled')).toBe('true')
+  })
+
   it('keeps a standing consent revocable after switching to no model', async () => {
     stubGateway({ enabled: true })
     vi.spyOn(api, 'system').mockResolvedValue({ mem_total_gb: 16 } as never)

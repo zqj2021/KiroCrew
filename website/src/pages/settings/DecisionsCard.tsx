@@ -30,7 +30,7 @@ import {
   type DecisionPointRow,
 } from './decisionsPreview'
 import { fmtPercent } from '../../i18n/format'
-import { DECISIONS_PROVIDER_QUERY_KEY, PRESET_NONE } from './decisionsProviderQuery'
+import { DECISIONS_PROVIDER_QUERY_KEY, PRESET_NONE, isRefusedHostedDefault } from './decisionsProviderQuery'
 import { i18nT } from '../../i18n/t'
 import { fetchDashboardConfig } from '../../api/dashboardConfigQuery'
 
@@ -497,6 +497,9 @@ export function DecisionsCard() {
   // With no decision model chosen there is nothing to consent to sending to; the
   // gateway refuses an enabling write, and the switch says so instead of offering one.
   const noModel = providerQ.data?.active === PRESET_NONE
+  // The hosted default the ceiling refuses reads as "No model" too, but the owner chose
+  // nothing: the picker names the refusal, and the switch is drawn off because nothing is sent.
+  const refusedDefault = providerQ.data !== undefined && isRefusedHostedDefault(providerQ.data)
 
   return (
     <SettingsCard>
@@ -518,11 +521,11 @@ export function DecisionsCard() {
       <SettingsToggle
         label={i18nT('pages.developer.featurePreviewsTab.decisions')}
         hint={i18nT('pages.developer.featurePreviewsTab.decisions_desc')}
-        checked={view.enabled}
+        checked={view.enabled && !refusedDefault}
         onChange={v => consentMut.mutate(v)}
         // With no model the switch can still be turned OFF: a consent that stood
         // before the switch to No model must stay revocable.
-        disabled={switchFrozen || (noModel && !view.enabled) || consentMut.isPending || scopeMut.isPending}
+        disabled={switchFrozen || (noModel && (!view.enabled || refusedDefault)) || consentMut.isPending || scopeMut.isPending}
         describedBy={describedBy}
       />
       {/* The egress fact carries body weight, not muted fine print: it is what a
@@ -531,14 +534,18 @@ export function DecisionsCard() {
           at all, where nothing can leave the machine. */}
       <p
         id={EGRESS_NOTE_ID}
-        className={backendMissing ? 'text-[12px] text-muted opacity-40' : 'text-[12px] text-text'}
+        className={
+          refusedDefault ? 'hidden' : backendMissing ? 'text-[12px] text-muted opacity-40' : 'text-[12px] text-text'
+        }
       >
         {/* Any address the gateway classifies as this machine -- a local preset or a
             hand-written loopback address -- makes the "over the internet" sentence
             false. The local wording names only the first hop ("the server at the
             address below, on this machine") and leaves where that server forwards it
             to the server, which holds for a hand-written tunnel too. */}
-        {noModel
+        {refusedDefault
+          ? null
+          : noModel
           ? i18nT('pages.developer.featurePreviewsTab.decisions_no_model_note')
           : providerQ.data?.loopback === true
             ? i18nT('pages.developer.featurePreviewsTab.decisions_egress_local')
