@@ -314,6 +314,27 @@ def antigravity_not_found_message(resolution: AntigravityResolution) -> str:
     )
 
 
+def _standalone_needs_empty_uid_flag() -> bool:
+    """True on POSIX hosts without a ``nobody`` group (Debian/Ubuntu/WSL2).
+
+    Google's standalone ``agy_acp_server.par`` embeds ``init_google.cc`` with default
+    ``--uid=nobody`` / ``--gid==uid`` and aborts at startup when ``getgrnam("nobody")``
+    fails (Debian/Ubuntu name GID 65534 ``nogroup``). Passing ``--uid=`` disables that
+    lookup without requiring root or ``/etc/group`` edits.
+    """
+    if platform_compat.IS_WINDOWS:
+        return False
+    try:
+        import grp
+
+        grp.getgrnam("nobody")
+    except KeyError:
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+    return False
+
+
 class AntigravityLaunch(ProcessAdapter):
     """Launch Google Antigravity's standalone ACP server or Python SDK ACP adapter."""
 
@@ -336,8 +357,11 @@ class AntigravityLaunch(ProcessAdapter):
         )
         self._helper_path = resolution.helper
         label = "kirocrew-antigravity-acp" if resolution.mode == "sdk" else "agy_acp_server"
+        argv = [resolution.server]
+        if resolution.mode == "standalone" and _standalone_needs_empty_uid_flag():
+            argv.append("--uid=")
         return SpawnPlan(
-            argv=[resolution.server],
+            argv=argv,
             spawn_label=label,
             stderr_label=label,
             extra_hidden_dirs=hidden,

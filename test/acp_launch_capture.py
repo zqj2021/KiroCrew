@@ -388,6 +388,11 @@ def _stub_common(stack: list, rec: _Recorder, tmp_path: Path, backend: str = "")
                     search_path=_SEARCH_PATH,
                 ),
             ),
+            patch.object(
+                antigravity_mod,
+                "_standalone_needs_empty_uid_flag",
+                return_value=False,
+            ),
             patch.object(pi_mod, "_resolve_pi_acp_bin", return_value=(_PI_ACP_ARGV, _SEARCH_PATH)),
             patch.object(pi_mod, "_resolve_pi_bin", return_value=(_PI_BIN, _SEARCH_PATH)),
             patch.object(pi_mod, "_pi_node_choice", return_value=pi_mod.PiNodeChoice()),

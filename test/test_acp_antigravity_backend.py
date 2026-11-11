@@ -254,6 +254,7 @@ async def test_antigravity_spawn_sets_helper_and_credential_mask(
         "kiro_crew.acp.harness.antigravity.resolve_antigravity_runtime",
         lambda **_kwargs: resolution,
     )
+    monkeypatch.setattr(antigravity_mod, "_standalone_needs_empty_uid_flag", lambda: False)
     preflight = AsyncMock(return_value=("/hidden/credential-home",))
     monkeypatch.setattr(launch_mod, "_run_preflight_bounded", preflight)
     session = SimpleNamespace(_prepare_session_mcp=AsyncMock())
@@ -281,6 +282,10 @@ async def test_antigravity_spawn_sets_helper_and_credential_mask(
     assert plan.extra_hidden_dirs == ("/hidden/credential-home",)
     assert env[ANTIGRAVITY_HARNESS_PATH_ENV] == resolution.helper
     assert process_adapter_for(ACP_BACKEND_ANTIGRAVITY).backend == ACP_BACKEND_ANTIGRAVITY
+
+    monkeypatch.setattr(antigravity_mod, "_standalone_needs_empty_uid_flag", lambda: True)
+    debian_plan = await adapter.resolve_spawn(ctx)
+    assert debian_plan.argv == [resolution.server, "--uid="]
 
 
 def test_antigravity_credential_mask_spares_only_its_own_token_files(
@@ -1539,6 +1544,7 @@ async def test_antigravity_sdk_spawn_plan_sets_label_and_localharness(
         "kiro_crew.acp.harness.antigravity.resolve_antigravity_runtime",
         lambda **_kwargs: resolution,
     )
+    monkeypatch.setattr(antigravity_mod, "_standalone_needs_empty_uid_flag", lambda: False)
     preflight = AsyncMock(return_value=("/hidden/credential-home",))
     monkeypatch.setattr(launch_mod, "_run_preflight_bounded", preflight)
     session = SimpleNamespace(_prepare_session_mcp=AsyncMock())
