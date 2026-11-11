@@ -447,6 +447,30 @@ class TestCronServiceBridge:
         ]
 
     @pytest.mark.asyncio
+    async def test_boot_keeps_crons_of_app_whose_record_is_not_an_object(
+        self, app_env, monkeypatch
+    ):
+        from unittest.mock import MagicMock
+
+        import kiro_crew.apps.bridges as bridges_mod
+        import kiro_crew.apps.execution as execution_mod
+        from kiro_crew.apps.manager import list_apps
+
+        app_root = app_env["home"] / "apps" / "damaged-app"
+        app_root.mkdir(parents=True, exist_ok=True)
+        (app_root / "installed.json").write_text("[]", encoding="utf-8")
+        monkeypatch.setattr(bridges_mod, "list_apps", list_apps)
+        monkeypatch.setattr(execution_mod, "third_party_execution_allowed", lambda: True)
+        mock_service = MagicMock()
+        mock_service.list_jobs.return_value = [SimpleNamespace(created_by="app:damaged-app")]
+        mock_service.remove_jobs_by_owner = AsyncMock(return_value=["job-id"])
+
+        disarmed = await bridges_mod.reconcile_app_crons_for_execution(mock_service)
+
+        assert disarmed == []
+        mock_service.remove_jobs_by_owner.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_boot_keeps_shipped_builtin_app_cron_armed(self, tmp_path, app_env, monkeypatch):
         from unittest.mock import MagicMock
 

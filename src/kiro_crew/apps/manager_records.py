@@ -149,6 +149,15 @@ def _read_schema_version(data: dict[str, Any]) -> int:
         return 1
 
 
+class InstalledRecordShapeError(ValueError):
+    """``installed.json`` parsed as JSON, but not as the object a record is.
+
+    Raised rather than read as "not installed": an absent record lets install and
+    cleanup paths treat the app's tree as a leftover, so a damaged one must stay
+    visible as damaged.
+    """
+
+
 @dataclass
 class InstalledApp:
     """Metadata persisted in ``installed.json`` for each installed app.
@@ -241,6 +250,10 @@ class InstalledApp:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> InstalledApp:
+        if not isinstance(data, dict):
+            raise InstalledRecordShapeError(
+                f"installed record is a JSON {type(data).__name__}, not an object"
+            )
         inst = cls(
             name=str(data.get("name", "")),
             version=str(data.get("version", "")),
@@ -276,7 +289,9 @@ class InstalledApp:
                 inst.resources = "gateway"
                 inst.lifecycle = "locked"
             elif old_managed in ("kirocrew", ""):
-                source = data.get("source", "")
+                # The coerced field, as read above: a non-string source must
+                # classify, not crash the read.
+                source = inst.source
                 if source.startswith("registry:"):
                     inst.origin = "registry"
                 elif source and not source.startswith("builtin"):

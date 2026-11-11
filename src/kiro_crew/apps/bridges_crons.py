@@ -25,6 +25,7 @@ from kiro_crew.apps.bridges_sources import _namespace, _registration_denied, _re
 from kiro_crew.apps.cron_sdk import CronSDK
 from kiro_crew.apps.execution import shipped_builtin_app_root
 from kiro_crew.apps.manager import app_dir, list_apps
+from kiro_crew.apps.manager_records import INSTALLED_META_FILENAME
 from kiro_crew.apps.manifest import AppManifest
 from kiro_crew.atomic_write import atomic_write, read_bytes_with_retry
 from kiro_crew.cron import (
@@ -1133,7 +1134,26 @@ async def reconcile_app_crons_for_execution(cron_service: Any) -> list[str]:
             cron_owner_names.add(owner.removeprefix("app:"))
 
     disarmed: list[str] = []
-    for app_name in sorted(cron_owner_names - installed_names):
+    # An owner whose record is still on disk is installed, just unlisted (a damaged
+    # record is skipped by list_apps): never an orphan, so its jobs are kept. The
+    # fire-time gate refuses them while its enablement cannot be read.
+    candidates = sorted(cron_owner_names - installed_names)
+    recorded = await asyncio.to_thread(
+        lambda: {
+            n
+            for n in candidates
+            if Path(n).name == n
+            and not n.startswith(".")
+            and (app_dir(n) / INSTALLED_META_FILENAME).exists()
+        }
+    )
+    for app_name in candidates:
+        if app_name in recorded:
+            logger.warning(
+                "App %s: keeping its persisted crons; its record exists but could not be " "listed",
+                app_name,
+            )
+            continue
         reason = "orphaned app cron owner has no installed app"
         logger.warning(
             "App %s: denying persisted cron restore (cron_boot_restore): %s",
