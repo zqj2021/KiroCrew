@@ -273,7 +273,13 @@
     "metrics_card_old_data": "Last updated more than 90 seconds ago",
     "metrics_card_fetch_failed": "The last metrics update failed",
     "metrics_card_cores_one": "{{count}} core",
-    "metrics_card_cores_other": "{{count}} cores"
+    "metrics_card_cores_other": "{{count}} cores",
+    "antigravity_quota_title": "Google Antigravity account & remaining quota — view pools, models, and reset times",
+    "antigravity_quota_checking": "Google Antigravity quota — checking remaining quota…",
+    "antigravity_quota_unavailable": "Google Antigravity quota — unavailable; open to retry",
+    "antigravity_quota_no_reading": "Google Antigravity quota — no quota reading yet; open to refresh",
+    "antigravity_quota_signin_required": "Google Antigravity quota — OAuth sign-in required; open for details",
+    "antigravity_quota_api_key": "Google Antigravity quota — using Gemini API key (per-project rate limits apply)"
   },
   "appSdk": {
     "chatEmbed": {
@@ -4974,6 +4980,37 @@
         "generic": "Allow for this session: stop blocking any command this rule blocks, until you close this chat (Session options → Close session) or {{productName}} restarts"
       },
       "pill_blocked": "Waiting for approval: {{command}}"
+    },
+    "antigravityAccountModal": {
+      "title": "Google Antigravity Quota",
+      "checking_account": "Checking Google Antigravity account…",
+      "checking_quota": "Checking remaining quota",
+      "account_details_unavailable": "Account details unavailable",
+      "show_email": "Show email",
+      "hide_email": "Hide email",
+      "oauth_badge": "Google OAuth",
+      "remaining_label": "{{pct}} remaining",
+      "resets_at": "Resets {{time}}",
+      "window_5h": "5-hour rolling window",
+      "window_weekly": "Weekly rolling window",
+      "window_rolling": "Rolling window",
+      "pool_gemini_models": "Gemini Models",
+      "pool_claude_gpt_models": "Claude & GPT Models",
+      "models_breakdown_title": "Per-model remaining quota ({{count}})",
+      "quota_unavailable": "Could not read Google Antigravity quota right now.",
+      "quota_no_reading": "No quota pools were returned for this account yet.",
+      "quota_signin_required": "No Google Antigravity OAuth session was found. Sign in with Google OAuth to view remaining subscription quota.",
+      "quota_api_key_notice": "Antigravity is running with a Gemini API key rather than a Google AI subscription OAuth token. Quota is governed by your Google Cloud project rate limits.",
+      "refresh_quota": "Refresh",
+      "refreshing_quota": "Refreshing…",
+      "refresh_in_flight": "A quota refresh is already running. Showing the updated reading shortly.",
+      "refresh_returned_stale": "Could not reach the Google Cloud Code quota endpoint; showing the last cached reading.",
+      "checked_at": "Checked at {{time}}",
+      "reading_may_be_stale": "Showing cached reading — latest refresh failed",
+      "quota_scope": "Remaining quota is shared across Antigravity IDE, CLI, and Kiro Crew sessions signed into this Google account.",
+      "manage_subscription": "Manage Google AI plan",
+      "pill_summary_pair": "Gemini {{gemini}} · Claude {{claude}}",
+      "pill_summary_single": "{{pct}} left"
     }
   },
   "hooks": {
@@ -6223,7 +6260,7 @@
         "repair_images_failed": "Images can't be repaired twice in one chat. Start a fresh session to keep going — this chat is kept, and the assistant continues from a summary.",
         "repair_images_not_persistent": "Images can't be repaired in an Incognito or Temporary chat, because reloading it erases its history. Start a fresh session to keep going.",
         "repair_images_retry_hint": "Something went wrong this time, so your one repair wasn't used — press “Repair images and resume” to try again.",
-      "hidden_scratch_folder": "This chat's folder was a temporary folder from an earlier run and can't be opened anymore. The chat now works in the default folder."
+        "hidden_scratch_folder": "This chat's folder was a temporary folder from an earlier run and can't be opened anymore. The chat now works in the default folder."
       },
       "crewLog": {
         "section_status": "Status",

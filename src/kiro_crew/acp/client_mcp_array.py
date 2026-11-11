@@ -39,6 +39,10 @@ import weakref
 from typing import TYPE_CHECKING, Any, Collection
 
 from kiro_crew import acp_tool_gate
+from kiro_crew.acp.antigravity_mcp_preflight import (
+    preflight_enabled_for_live_session,
+    probe_antigravity_mcp_servers,
+)
 from kiro_crew.acp.ipc_pickup import with_ipc_pickups
 from kiro_crew.acp.mcp_mount_check import schedule_mount_check
 from kiro_crew.acp.mcp_ref_guard import (
@@ -1516,6 +1520,15 @@ async def _prune_unstartable_mcp(self: AcpClient, servers: list[Any]) -> list[An
     before its request is sent.
     """
     kept, pruned = await asyncio.to_thread(prune_unstartable, servers)
+    if (
+        kept
+        and self._is_antigravity
+        and self.is_process_alive()
+        and preflight_enabled_for_live_session()
+    ):
+        kept, sandbox_pruned = await probe_antigravity_mcp_servers(kept)
+        if sandbox_pruned:
+            pruned = [*pruned, *sandbox_pruned]
     # Bounded where it is kept, by the report's own caps: the count by the
     # failed bucket's size, and each name and reason by its string cap. The
     # reason quotes the configured command, which can hold a whole CLI line

@@ -314,7 +314,13 @@
     "tab_title": "{{label}} — {{productName}}",
     "tab_title_chat": "聊天",
     "tab_title_session": "{{session}} — {{panel}}",
-    "release_notes_not_published_yet": "{{release}} 的更新日志尚未发布，现改为显示 {{shown}} 的更新日志。"
+    "release_notes_not_published_yet": "{{release}} 的更新日志尚未发布，现改为显示 {{shown}} 的更新日志。",
+    "antigravity_quota_title": "Google Antigravity 账号与剩余额度 — 查看额度池、各模型余量与重置时间",
+    "antigravity_quota_checking": "Google Antigravity 额度 — 正在查询剩余额度…",
+    "antigravity_quota_unavailable": "Google Antigravity 额度 — 暂时无法读取，点击打开重试",
+    "antigravity_quota_no_reading": "Google Antigravity 额度 — 暂无额度数据，点击打开刷新",
+    "antigravity_quota_signin_required": "Google Antigravity 额度 — 需要 Google OAuth 登录，点击查看详情",
+    "antigravity_quota_api_key": "Google Antigravity 额度 — 当前使用 Gemini API 密钥（按项目速率限制计费）"
   },
   "appSdk": {
     "pullRequestPanel": {
@@ -5502,7 +5508,7 @@
         "backup_others_on_drive": "备份到此云盘的其他安装实例：{{count}} 个",
         "backup_show_others": "包含其他安装实例的存档",
         "backup_others_truncated": "只显示前 {{max}} 个其他安装实例。",
-"backup_archives_truncated": "部分{{kind}}存档未能列出，最新的存档可能未显示。",
+        "backup_archives_truncated": "部分{{kind}}存档未能列出，最新的存档可能未显示。",
         "backup_shared_note": "两个安装实例共用一个云盘，并不意味着共享记忆或共享会话。每个备份都是某一时刻的独立存档，恢复只是把该文件下载到一个暂存文件夹 — 文件由你自己替换，且需在 gateway 停止时进行。",
         "backup_restore_foreign_confirm": "此存档由另一个安装实例（{{install}}）上传。恢复它会下载那个安装实例的数据，而不是此安装实例的数据。仍要下载吗？",
         "backup_restore_unverified_confirm": "此存档存放在此安装实例自己的文件夹里，但此安装实例没有上传它的记录。任何能写入云盘的东西都能创建那个文件夹，所以它未必来自此安装实例。仍要下载吗？",
@@ -11026,6 +11032,37 @@
       "job_title": "{{name}} — {{time}} {{tz}}",
       "job_title_paused": "{{name}}（已暂停）— {{time}} {{tz}}",
       "job_name_paused": "{{name}}（已暂停）"
+    },
+    "antigravityAccountModal": {
+      "title": "Google Antigravity 剩余额度",
+      "checking_account": "正在查询 Google Antigravity 账号…",
+      "checking_quota": "正在查询剩余额度",
+      "account_details_unavailable": "无法读取账号详情",
+      "show_email": "显示邮箱",
+      "hide_email": "隐藏邮箱",
+      "oauth_badge": "Google OAuth 认证",
+      "remaining_label": "剩余 {{pct}}",
+      "resets_at": "重置于 {{time}}",
+      "window_5h": "5 小时滚动窗口",
+      "window_weekly": "每周滚动窗口",
+      "window_rolling": "滚动窗口",
+      "pool_gemini_models": "Gemini 系列模型",
+      "pool_claude_gpt_models": "Claude 与 GPT 系列模型",
+      "models_breakdown_title": "各模型剩余额度明细（{{count}}）",
+      "quota_unavailable": "暂时无法读取 Google Antigravity 剩余额度。",
+      "quota_no_reading": "当前账号暂未返回额度池数据。",
+      "quota_signin_required": "未检测到 Google Antigravity OAuth 登录会话。请先完成 Google OAuth 登录以查看订阅剩余额度。",
+      "quota_api_key_notice": "当前使用 Gemini API 密钥模式运行，而非 Google AI 订阅 OAuth 令牌；配额遵循所属 Google Cloud 项目的速率限制。",
+      "refresh_quota": "刷新额度",
+      "refreshing_quota": "正在刷新…",
+      "refresh_in_flight": "后台正在刷新额度，稍后将自动显示最新结果。",
+      "refresh_returned_stale": "无法连接 Google Cloud Code 配额接口，当前展示最近一次缓存数据。",
+      "checked_at": "更新于 {{time}}",
+      "reading_may_be_stale": "当前显示缓存数据 — 最近一次刷新失败",
+      "quota_scope": "剩余额度在登录同一 Google 账号的 Antigravity IDE、CLI 与 Kiro Crew 会话之间共享。",
+      "manage_subscription": "管理 Google AI 订阅",
+      "pill_summary_pair": "Gemini 剩 {{gemini}} · Claude 剩 {{claude}}",
+      "pill_summary_single": "剩余 {{pct}}"
     }
   },
   "hooks": {
@@ -12398,7 +12435,7 @@
         "spec_choice_done_resuming": "从现在起 {{agent}} 使用 {{file}}，正在重新启动会话。之后可用 kirocrew agent pin 更改。",
         "spec_choice_done": "从现在起 {{agent}} 使用 {{file}}。请重新发送消息以启动。之后可用 kirocrew agent pin 更改。",
         "spec_choice_failed": "无法保存所选文件",
-      "hidden_scratch_folder": "此聊天的文件夹是之前一次运行留下的临时文件夹，现在已无法打开。此聊天现在使用默认文件夹。"
+        "hidden_scratch_folder": "此聊天的文件夹是之前一次运行留下的临时文件夹，现在已无法打开。此聊天现在使用默认文件夹。"
       },
       "folderPanel": {
         "clear_search": "清除搜索",

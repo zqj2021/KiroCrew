@@ -121,6 +121,10 @@ def register(app: web.Application) -> None:
     app.router.add_post("/api/tasks/{task_id}", handlers.api_task_action)
     app.router.add_post("/api/tasks/{task_id}/cancel", handlers.api_task_cancel)
     app.router.add_get("/api/usage/kiro", handlers.api_kiro_usage)
+    app.router.add_get("/api/usage/antigravity", handlers.api_antigravity_usage)
+    app.router.add_post(
+        "/api/usage/antigravity/refresh", handlers.api_antigravity_usage_refresh
+    )
     app.router.add_get("/api/usage", handlers.api_usage)
     app.router.add_get("/api/usage/series", handlers.api_usage_series)
     app.router.add_get("/api/telemetry/startup", handlers.api_telemetry_startup)

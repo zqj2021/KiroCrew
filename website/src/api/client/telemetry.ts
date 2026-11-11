@@ -12,6 +12,7 @@
  */
 
 import type { KiroUsagePayload, KiroUsageRefreshResponse } from '../client'
+import type { AntigravityUsageEnvelope } from '../antigravityUsage'
 import type { ClientTransport } from './transport'
 
 /** WakaTime coding-stats payload (GET /api/wakatime/stats). When the
@@ -189,6 +190,8 @@ export function createTelemetryEndpoints({ get, post, j, jfetch: fetch }: Client
      * one refusal is 409 `refresh_in_flight` while a refresh is already running.
      */
     sessionsUsageRefresh: () => post('/api/sessions/usage/refresh').then(j) as Promise<KiroUsageRefreshResponse>,
+    antigravityUsage: () => fetch('/api/usage/antigravity').then(j) as Promise<AntigravityUsageEnvelope>,
+    antigravityUsageRefresh: () => post('/api/usage/antigravity/refresh').then(j) as Promise<AntigravityUsageEnvelope>,
     providerUsage: () => fetch('/api/usage').then(j),
   }
 

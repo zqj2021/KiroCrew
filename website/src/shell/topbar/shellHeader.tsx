@@ -1,6 +1,7 @@
 import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react'
 import { TOPBAR_FOCUS_Z, TOPBAR_Z } from '../../lib/themeDecorLayer'
 import { kiroUsageSegment } from './kiroUsageReadout'
+import { antigravityUsageSegment, useAntigravityUsageReadout } from './antigravityUsageReadout'
 import { metricsSegment, MetricsErrorNotice } from './metricsReadout'
 import { ResourcePostureChip } from './resourcePostureChip'
 import { Bell, Fullscreen, Menu, Plug, Unplug } from 'lucide-react'
@@ -37,6 +38,7 @@ const UpdatePill = lazy(() => import('../../components/UpdatePill'))
 // The switcher with its Team Crews group, lazy so the relay list's code stays
 // out of the app core. Only the desktop app has the bridge it needs.
 const TeamCrewsSwitcher = lazy(() => import('../../components/TeamCrewsGroup'))
+const AntigravityAccountModal = lazy(() => import('../../components/AntigravityAccountModal'))
 const hasRelayCrewBridge = () =>
   typeof (window as { relayCrewAPI?: { open?: unknown } }).relayCrewAPI?.open === 'function'
 
@@ -166,6 +168,7 @@ export function ShellHeader({ shell }: { shell: AppShell }) {
   // Turning it off closes an open sheet; turning it on reads milestones once.
   const explore = useExplorePreview()
   useExplorePreviewSwitch(explore)
+  const antigravityUsage = useAntigravityUsageReadout()
   // Desktop only: the phone form has no full-width search to hide (its centre
   // track is already `auto`), and its layout is not this setting's to change.
   const searchHidden = !isMobile && !topbarSearch
@@ -174,6 +177,15 @@ export function ShellHeader({ shell }: { shell: AppShell }) {
       {/* The one Milestones panel; the top-bar indicator, the phone menu row
           and the milestone notice all open it. */}
       {explore && <MilestonesSheet />}
+      {antigravityUsage.open && (
+        <Suspense fallback={null}>
+          <AntigravityAccountModal
+            open={antigravityUsage.open}
+            onClose={() => antigravityUsage.setOpen(false)}
+            usage={antigravityUsage.state}
+          />
+        </Suspense>
+      )}
       {/* Topbar */}
       {/* stable theming hook — see website/docs/theming-contract.md */}
       <header
@@ -578,6 +590,8 @@ export function ShellHeader({ shell }: { shell: AppShell }) {
             if (!isMobile) segments.push(metricsSegment(metrics, seg))
             const usage = kiroUsageSegment({ kiroUsageState, usageSegmentHidden, setKiroUsageOpen }, seg, isMobile)
             if (usage) segments.push(usage)
+            const agUsage = antigravityUsageSegment(antigravityUsage, seg, isMobile)
+            if (agUsage) segments.push(agUsage)
             }
             // Extension slot: downstream-registered capsule segments (e.g. an
             // edition credential-TTL or spend segment) join the capsule INSIDE

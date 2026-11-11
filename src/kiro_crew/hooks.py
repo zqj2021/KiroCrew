@@ -1513,6 +1513,15 @@ _INTERNAL_READ_ALLOWLIST: dict[str, str] = {
     # older kiro-cli cache layout.)
     "kiro_usage_api.sso_token_cli": ".aws/sso/cache/kiro-auth-token-cli.json",
     "kiro_usage_api.sso_token_ide": ".aws/sso/cache/kiro-auth-token.json",
+    # ``kiro_crew.dashboard.handlers.antigravity_usage_api`` reads the Google
+    # Antigravity ACP OAuth credential and auth-mode settings written by
+    # ``agy_acp_server`` under ``~/.gemini/antigravity-acp/`` to query the
+    # hardcoded Cloud Code quota endpoints (``cloudcode-pa.googleapis.com``)
+    # for the dashboard's Antigravity remaining-quota readout. Tokens go only
+    # to ``oauth2.googleapis.com`` / ``cloudcode-pa.googleapis.com`` over TLS
+    # with redirects disabled, are never logged, and only redacted numeric
+    # quota summaries return to the dashboard.
+    "antigravity_usage_api.acp_token": ".gemini/antigravity-acp/acp_token.json",
 }
 
 
@@ -1538,6 +1547,8 @@ _AUDIT_ONLY_READ_IDS: dict[str, str] = {
     # justification in _INTERNAL_READ_ALLOWLIST -- identical posture, different
     # storage layout).
     "kiro_usage_api.sqlite_token": ".local/share/{kiro-cli,amazon-q}/data.sqlite3",
+    # Custom ``GEMINI_CLI_HOME`` Antigravity OAuth store when relocated outside ``~``.
+    "antigravity_usage_api.custom_home_token": "$GEMINI_CLI_HOME/.gemini/antigravity-acp/acp_token.json",
     # Same store, read by ``kiro_crew.kiro_cli.signed_in_via_idc`` to answer one
     # question for the enterprise MCP-governance diagnostic: did this identity come
     # from Identity Center? Only the two non-secret ``auth.idc.*`` marker rows are

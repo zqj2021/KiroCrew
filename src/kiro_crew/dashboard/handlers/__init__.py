@@ -596,6 +596,20 @@ async def api_tasks_summary(request):
     return await handler(request)
 
 
+async def api_antigravity_usage(request):
+    from kiro_crew.dashboard.handlers.antigravity_usage_api import api_antigravity_usage as handler
+
+    return await handler(request)
+
+
+async def api_antigravity_usage_refresh(request):
+    from kiro_crew.dashboard.handlers.antigravity_usage_api import (
+        api_antigravity_usage_refresh as handler,
+    )
+
+    return await handler(request)
+
+
 from kiro_crew.dashboard.handlers.telemetry import (  # noqa: E402, F401
     api_beacon_status,
     api_collection_status,
