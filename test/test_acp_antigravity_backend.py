@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -1913,3 +1914,354 @@ async def test_live_subprocess_kirocrew_antigravity_acp_handshake(tmp_path: Path
         if proc.returncode is None:
             proc.kill()
             await proc.wait()
+
+
+def test_ccpa_catalog_defaults_to_low_and_never_auto_routes_thinking_to_high() -> None:
+    from kiro_crew.acp.adapters.antigravity_ccpa import (
+        inject_include_thoughts,
+        parse_fetch_available_models_response,
+    )
+
+    # Simulate CCPA returning -high variants first in agentModelSorts (the exact root
+    # cause of standalone auto-routing model switches onto -high).
+    raw_ccpa = {
+        "models": {
+            "gemini-4-argon-high": {"displayName": "Gemini 4 Argon (High)", "maxTokens": 1048576},
+            "gemini-4-argon-medium": {
+                "displayName": "Gemini 4 Argon (Medium)",
+                "maxTokens": 1048576,
+            },
+            "gemini-4-argon-low": {"displayName": "Gemini 4 Argon (Low)", "maxTokens": 1048576},
+            "gemini-3.8-flash-high": {
+                "displayName": "Gemini 3.8 Flash (High)",
+                "maxTokens": 1048576,
+            },
+            "gemini-3.8-flash-medium": {
+                "displayName": "Gemini 3.8 Flash (Medium)",
+                "maxTokens": 1048576,
+            },
+            "gemini-3.8-flash-low": {
+                "displayName": "Gemini 3.8 Flash (Low)",
+                "maxTokens": 1048576,
+            },
+        },
+        "agentModelSorts": [
+            {
+                "groups": [
+                    {
+                        "modelIds": [
+                            "gemini-4-argon-high",
+                            "gemini-4-argon-medium",
+                            "gemini-4-argon-low",
+                            "gemini-3.8-flash-high",
+                            "gemini-3.8-flash-medium",
+                            "gemini-3.8-flash-low",
+                        ]
+                    }
+                ]
+            }
+        ],
+    }
+
+    catalog = parse_fetch_available_models_response(raw_ccpa)
+    init_model, init_lvl = catalog.resolve_initial_model()
+    assert (init_model, init_lvl) == ("gemini-3.8-flash-low", "low")
+
+    # Unpinned family switch MUST land on low, never auto-routing to -high.
+    switched = catalog.resolve_model_switch("gemini-4-argon", explicit_thinking_level=None)
+    assert switched == ("gemini-4-argon-low", "low")
+
+    # Explicit user thinking choice IS preserved across family switch.
+    switched_explicit = catalog.resolve_model_switch(
+        "gemini-4-argon", explicit_thinking_level="medium"
+    )
+    assert switched_explicit == ("gemini-4-argon-medium", "medium")
+
+    # Verify includeThoughts injection defaults to True while respecting explicit False.
+    req_default = inject_include_thoughts({"contents": []})
+    assert req_default["generationConfig"]["thinkingConfig"]["includeThoughts"] is True
+    req_disabled = inject_include_thoughts(
+        {"generationConfig": {"thinkingConfig": {"includeThoughts": False}}}
+    )
+    assert req_disabled["generationConfig"]["thinkingConfig"]["includeThoughts"] is False
+
+
+@pytest.mark.asyncio
+async def test_sdk_oauth_mode_model_switch_keeps_low_until_user_picks_thinking(
+    tmp_path: Path,
+) -> None:
+    from kiro_crew.acp.adapters.antigravity_ccpa import (
+        CcpaOAuthManager,
+        build_ccpa_catalog_from_models,
+    )
+    from kiro_crew.acp.adapters.antigravity_sdk import AntigravitySdkAcpServer
+
+    tok_dir = tmp_path / "antigravity-acp"
+    tok_dir.mkdir(parents=True)
+    (tok_dir / "acp_token.json").write_text(
+        json.dumps(
+            {
+                "client_id": "cid",
+                "client_secret": "csec",
+                "refresh_token": "rtok",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fake_mgr = CcpaOAuthManager(env={"GEMINI_HOME": str(tmp_path)})
+    fake_mgr.get_catalog = lambda: build_ccpa_catalog_from_models(())  # type: ignore[method-assign]
+
+    frames: list[dict] = []
+
+    async def capture(line: str) -> None:
+        frames.append(json.loads(line))
+
+    server = AntigravitySdkAcpServer(
+        send_line=capture,
+        env={"GEMINI_HOME": str(tmp_path)},
+        oauth_manager=fake_mgr,
+    )
+
+    await server.handle_raw_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": str(tmp_path)}}
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    res_new = next(f["result"] for f in frames if f.get("id") == 1)
+    sid = res_new["sessionId"]
+    assert res_new["models"]["currentModelId"] == "gemini-3.8-flash-low"
+    opts_by_id = {o["id"]: o for o in res_new["configOptions"]}
+    assert opts_by_id["model"]["currentValue"] == "gemini-3.8-flash"
+    assert opts_by_id["thinking_level"]["currentValue"] == "low"
+
+    # Switch model family to gemini-4-argon without setting thinking_level -> stays low!
+    await server.handle_raw_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session/set_config_option",
+                "params": {"sessionId": sid, "configId": "model", "value": "gemini-4-argon"},
+            }
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    res_switch = next(f["result"] for f in frames if f.get("id") == 2)
+    sw_opts = {o["id"]: o for o in res_switch["configOptions"]}
+    assert sw_opts["model"]["currentValue"] == "gemini-4-argon"
+    assert sw_opts["thinking_level"]["currentValue"] == "low"
+    assert server._sessions[sid].model_id == "gemini-4-argon-low"
+
+    # Explicit user thinking_level selection -> moves to high and sticks on next switch.
+    await server.handle_raw_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "session/set_config_option",
+                "params": {"sessionId": sid, "configId": "thinking_level", "value": "high"},
+            }
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    assert server._sessions[sid].model_id == "gemini-4-argon-high"
+    assert server._sessions[sid].thinking_level == "high"
+    await server.close_all()
+
+
+@pytest.mark.asyncio
+async def test_sdk_streams_tool_step_thoughts_and_anti_stall_progress(tmp_path: Path) -> None:
+    from kiro_crew.acp.adapters.antigravity_sdk import AntigravitySdkAcpServer
+
+    frames: list[dict] = []
+
+    async def capture(line: str) -> None:
+        frames.append(json.loads(line))
+
+    def slow_tool_strategy(_session: object, _ask: object):
+        class SlowConv:
+            connection = SimpleNamespace(cumulative_usage=SimpleNamespace(total_token_count=512))
+
+            async def send(self, _payload: object) -> None:
+                return None
+
+            async def receive_steps(self):
+                await asyncio.sleep(0.12)
+                # 1) Tool-planning step (STEP_TARGET_ENVIRONMENT) with thinking_delta:
+                yield SimpleNamespace(
+                    id="step-plan-1",
+                    source="STEP_SOURCE_MODEL",
+                    target="STEP_TARGET_ENVIRONMENT",
+                    status="STEP_STATUS_IN_PROGRESS",
+                    thinking_delta="Inspecting workspace layout first.\n",
+                    content_delta="",
+                    tool_calls=[],
+                )
+                # 2) Short tool-planning step with content_delta intent only:
+                read_tc = SimpleNamespace(
+                    step_id="step-read",
+                    name="view_file",
+                    server_name="",
+                    args={"path": str(tmp_path / "README.md")},
+                )
+                yield SimpleNamespace(
+                    id="step-read",
+                    source="STEP_SOURCE_MODEL",
+                    target="STEP_TARGET_ENVIRONMENT",
+                    status="STEP_STATUS_DONE",
+                    thinking_delta="",
+                    content_delta="Read README.md",
+                    tool_calls=[read_tc],
+                    content="file-body",
+                )
+                # 3) Subagent step must NOT leak into root chat chunks:
+                yield SimpleNamespace(
+                    id="step-sub",
+                    source="STEP_SOURCE_MODEL",
+                    target="STEP_TARGET_USER",
+                    status="STEP_STATUS_DONE",
+                    parent_trajectory_id="child-traj-1",
+                    thinking_delta="subagent secret thought",
+                    content_delta="subagent text",
+                    tool_calls=[],
+                )
+                # 4) Final user-facing answer step:
+                yield SimpleNamespace(
+                    id="step-final",
+                    source="STEP_SOURCE_MODEL",
+                    target="STEP_TARGET_USER",
+                    status="STEP_STATUS_DONE",
+                    thinking_delta="Synthesizing final answer.\n",
+                    content_delta="Here is the summary.",
+                    tool_calls=[],
+                )
+
+        class FakeCM:
+            async def __aenter__(self):
+                return SlowConv()
+
+            async def __aexit__(self, *_exc):
+                return None
+
+        return FakeCM()
+
+    server = AntigravitySdkAcpServer(
+        send_line=capture,
+        strategy_factory=slow_tool_strategy,
+        env={"GEMINI_API_KEY": "test-key", "GEMINI_HOME": str(tmp_path)},
+    )
+    server._initial_thinking_hint_secs = 0.04
+    server._thinking_keepalive_interval_secs = 0.5
+
+    await server.handle_raw_line(
+        json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "method": "session/new", "params": {"cwd": str(tmp_path)}}
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+    sid = next(f["result"] for f in frames if f.get("id") == 1)["sessionId"]
+
+    await server.handle_raw_line(
+        json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "session/prompt",
+                "params": {"sessionId": sid, "prompt": [{"type": "text", "text": "check"}]},
+            }
+        )
+    )
+    await asyncio.gather(*list(server._in_flight_tasks))
+
+    updates = [f["params"]["update"] for f in frames if f.get("method") == "session/update"]
+    thoughts = [
+        u["content"]["text"] for u in updates if u.get("sessionUpdate") == "agent_thought_chunk"
+    ]
+    messages = [
+        u["content"]["text"] for u in updates if u.get("sessionUpdate") == "agent_message_chunk"
+    ]
+
+    combined_thoughts = "".join(thoughts)
+    assert "正在思考" in combined_thoughts
+    assert "Inspecting workspace layout first." in combined_thoughts
+    assert "Read README.md" in combined_thoughts
+    assert "Synthesizing final answer." in combined_thoughts
+    assert "subagent secret thought" not in combined_thoughts
+    assert messages == ["Here is the summary."]
+    await server.close_all()
+
+
+def test_antigravity_background_worker_pins_gemini_3_8_flash() -> None:
+    from kiro_crew.config.loader import KiroCrewConfig
+
+    cfg = KiroCrewConfig()
+    cfg.agent.acp_backend = ACP_BACKEND_ANTIGRAVITY
+    cfg.agent.model = "gemini-4-argon"
+
+    # Even when foreground chat is pinned to gemini-4-argon, _bg (kirocrew-lite)
+    # resolves to gemini-3.8-flash on antigravity!
+    assert (
+        cfg.acp_effective_model(
+            "kirocrew-lite",
+            None,
+            global_model="gemini-4-argon",
+            namespace="antigravity",
+        )
+        == "gemini-3.8-flash"
+    )
+    # Explicit role_models.background override wins when configured by the user.
+    cfg.agent.role_models["background"] = "gemini-2.5-flash"
+    assert (
+        cfg.acp_effective_model(
+            "kirocrew-lite",
+            None,
+            global_model="gemini-4-argon",
+            namespace="antigravity",
+        )
+        == "gemini-2.5-flash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_bg_session_cancels_unfinished_turn_before_releasing_semaphore() -> None:
+    from kiro_crew.session_background import _ProviderBgSession
+
+    cancel_called = []
+    sem = asyncio.Semaphore(1)
+
+    class FakeBgProvider:
+        session_id = "bg-sid"
+
+        async def stream(self, _msg: str, *, allow_image: bool = True):
+            del allow_image
+            yield SimpleNamespace(kind="chunk", content="part1")
+            yield SimpleNamespace(kind="complete", content="")
+
+        async def cancel(self) -> None:
+            # Semaphore MUST still be locked when cancel() runs!
+            cancel_called.append(sem.locked())
+
+    sess_entry = SimpleNamespace(provider=FakeBgProvider(), semaphore=sem)
+
+    # 1) Normal completion (breaking on EVENT_COMPLETE + destroy(), as run_bg_oneliner does) -> NO cancel().
+    handle_ok = _ProviderBgSession(sess_entry)  # type: ignore[arg-type]
+    try:
+        async for ev in handle_ok.prompt("title"):
+            if ev.kind == "complete":
+                break
+    finally:
+        await handle_ok.destroy()
+    assert cancel_called == []
+    assert not sem.locked()
+
+    # 2) Premature timeout/destroy before EVENT_COMPLETE -> cancel() runs BEFORE release!
+    handle_abort = _ProviderBgSession(sess_entry)  # type: ignore[arg-type]
+    gen = handle_abort.prompt("slow")
+    first = await gen.__anext__()
+    assert first.kind == "chunk"
+    await handle_abort.destroy()
+    await gen.aclose()
+    assert cancel_called == [True]
+    assert not sem.locked()

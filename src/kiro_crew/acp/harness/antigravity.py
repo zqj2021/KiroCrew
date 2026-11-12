@@ -10,8 +10,8 @@ Supports two execution modes behind one per-session ``ProcessAdapter``:
    binary, wiring ``policy.ask_user`` into ``LocalAgentConfig.policies`` for pre-execution
    ``session/request_permission`` gating.
 
-``ANTIGRAVITY_ACP_MODE`` selects ``"auto"`` (default: standalone pair when present, else
-Python SDK adapter when ``google-antigravity`` is installed), ``"sdk"``, or
+``ANTIGRAVITY_ACP_MODE`` selects ``"auto"`` (default: Python SDK adapter when
+``google-antigravity`` is installed, else standalone pair), ``"sdk"``, or
 ``"standalone"``.
 """
 
@@ -231,26 +231,31 @@ def _resolve_antigravity_runtime() -> AntigravityResolution:
     if requested_mode == "sdk":
         return _resolve_sdk_runtime(env, search_path)
 
+    if requested_mode == "standalone" or env.get(ANTIGRAVITY_ACP_BIN_ENV, ""):
+        server = _find_main_executable(env, search_path)
+        helper = _find_helper(env, server, search_path)
+        return AntigravityResolution(
+            server=server,
+            helper=helper,
+            search_path=search_path,
+            mode="standalone",
+        )
+
+    # Prefer the lightweight in-tree Python SDK adapter when installed (~35 MB RSS,
+    # live thought streaming across tool + user steps, and deterministic low-thinking
+    # routing over both Google Antigravity OAuth CCPA and GEMINI_API_KEY / Vertex AI).
+    sdk_res = _resolve_sdk_runtime(env, search_path)
+    if sdk_res.server and sdk_res.helper:
+        return sdk_res
+
     server = _find_main_executable(env, search_path)
     helper = _find_helper(env, server, search_path)
-    standalone = AntigravityResolution(
+    return AntigravityResolution(
         server=server,
         helper=helper,
         search_path=search_path,
         mode="standalone",
     )
-    if (
-        requested_mode == "standalone"
-        or env.get(ANTIGRAVITY_ACP_BIN_ENV, "")
-        or server is not None
-        or helper is not None
-    ):
-        return standalone
-
-    sdk_res = _resolve_sdk_runtime(env, search_path)
-    if sdk_res.server and sdk_res.helper:
-        return sdk_res
-    return standalone
 
 
 def probe_antigravity_runtime() -> AntigravityResolution:

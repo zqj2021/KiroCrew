@@ -687,3 +687,17 @@ def launch_effort_supported(backend: str, level: str) -> bool:
 def model_registry_namespace(backend: str) -> str:
     """The model-registry namespace key for *backend* (default ``acp``)."""
     return _MODEL_REGISTRY_NAMESPACE_BY_BACKEND.get(backend, "acp")
+
+
+#: Built-in lightweight background model per namespace when neither ``model_override``
+#: nor ``agent.role_models['background']`` pins a concrete model. Keeps unattended
+#: ``_bg`` / ``kirocrew-lite`` workers on Gemini 3.8 Flash instead of inheriting a
+#: heavyweight interactive chat model such as ``gemini-4-argon``.
+_DEFAULT_BACKGROUND_MODEL_BY_NAMESPACE: Mapping[str, str] = {
+    "antigravity": "gemini-3.8-flash",
+}
+
+
+def default_background_model_for_namespace(namespace: str) -> str:
+    """Built-in lightweight background model for *namespace*, or ``""`` when unset."""
+    return _DEFAULT_BACKGROUND_MODEL_BY_NAMESPACE.get(namespace, "")

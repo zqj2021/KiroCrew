@@ -3,17 +3,22 @@
 Bridges Kiro Crew's per-session ``AcpClient`` transport directly onto Google's official
 open-source ``google-antigravity`` SDK (``Agent`` / ``LocalAgentConfig`` / ``Conversation``):
 
-* **Zero external archive setup**: uses the ``localharness`` binary bundled inside the
-  ``google-antigravity`` Python wheel (``pip install google-antigravity``).
+* **Unified OAuth CCPA + API-key + Vertex AI auth**: authenticates directly with the
+  user's signed-in Google Antigravity OAuth credential
+  (``~/.gemini/antigravity-acp/acp_token.json``) via :mod:`antigravity_ccpa`'s loopback
+  proxy, as well as ``GEMINI_API_KEY`` and Vertex AI.
+* **Live reasoning visibility across every step**: injects ``includeThoughts = True`` on
+  CCPA streams, forwards ``thinking_delta`` on both ``StepTarget.ENVIRONMENT``
+  (tool-planning) and ``StepTarget.USER`` (answer) steps as ``agent_thought_chunk``, and
+  emits anti-stall thinking progress during multi-second server-side reasoning so
+  Kiro Crew's ``ThinkingBlock`` opens promptly without stalling.
+* **Deterministic ``low`` thinking defaults**: starts sessions on ``low`` thinking
+  (``gemini-3.8-flash-low`` on CCPA) and never auto-escalates thinking mode to ``high``
+  when switching model families unless the user explicitly selected a ``thinking_level``.
 * **True pre-execution tool gating**: wires ``google.antigravity.hooks.policy.ask_user``
-  into ``LocalAgentConfig.policies`` so privileged built-in tools (``run_command``,
-  ``edit_file``, ``create_file``, ``read_url_content``, ``search_web``, etc.), out-of-workspace
-  file reads, and all MCP server tools emit an ACP ``tool_call`` notification followed by
+  into ``LocalAgentConfig.policies`` so privileged built-in tools, out-of-workspace file
+  reads, and all MCP server tools emit an ACP ``tool_call`` notification followed by
   ``session/request_permission`` *before* ``localharness`` executes a single instruction.
-* **Live session tuning & 1M-context telemetry**: supports ``model``, ``thinking_level``,
-  and ``mode`` updates via ``session/set_config_option`` (preserving conversation trajectory
-  across reconnections via ``CREATE_OR_RESUME``) and emits ``usage_update`` notifications
-  with the 1,048,576-token context window size.
 """
 
 from __future__ import annotations
@@ -25,22 +30,33 @@ import importlib.metadata
 import json
 import logging
 import os
+import shutil
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from kiro_crew.acp.adapters.antigravity_ccpa import (
+    CcpaCatalog,
+    CcpaLoopbackProxy,
+    CcpaOAuthManager,
+    build_aidev_user_agent,
+    has_valid_oauth_token_file,
+)
+
 logger = logging.getLogger(__name__)
 
-#: Protocol version and context capacity advertised on the ACP wire.
+#: Protocol version and default context capacity advertised on the ACP wire.
 SDK_ACP_PROTOCOL_VERSION = 1
 ANTIGRAVITY_CONTEXT_WINDOW_TOKENS = 1_048_576
 ANTIGRAVITY_SDK_ADAPTER_BIN = "kirocrew-antigravity-acp"
 ANTIGRAVITY_SDK_VERSION_PREFIX = "sdk-"
 
-#: Canonical Gemini models offered in the ``model`` session select.
+#: Canonical Gemini models offered in the ``model`` session select for API-key/Vertex mode.
 DEFAULT_ANTIGRAVITY_MODELS: tuple[tuple[str, str], ...] = (
+    ("gemini-3.8-flash", "Gemini 3.8 Flash"),
     ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview"),
     ("gemini-3-flash-preview", "Gemini 3 Flash Preview"),
     ("gemini-2.5-pro", "Gemini 2.5 Pro"),
@@ -48,13 +64,18 @@ DEFAULT_ANTIGRAVITY_MODELS: tuple[tuple[str, str], ...] = (
 )
 DEFAULT_MODEL_ID = "gemini-2.5-flash"
 
-#: Thinking levels offered on ``thinking_level``.
+#: Thinking levels offered on ``thinking_level``. Default is strictly ``low`` so thinking
+#: mode is never auto-routed to ``high`` behind the user's back.
 THINKING_OPTIONS: tuple[tuple[str, str], ...] = (
     ("low", "Low"),
     ("medium", "Medium"),
     ("high", "High"),
 )
-DEFAULT_THINKING_LEVEL = "high"
+DEFAULT_THINKING_LEVEL = "low"
+
+#: Anti-stall progress thresholds while waiting for pre-HTTP-200 reasoning tokens.
+_INITIAL_THINKING_HINT_SECS = 2.0
+_THINKING_KEEPALIVE_INTERVAL_SECS = 15.0
 
 #: Session modes matching standalone Antigravity ACP so ``Routing.SESSION_CONFIG``
 #: and ``ACP_BACKEND_FORBIDDEN_MODES`` work identically across both runtimes.
@@ -180,10 +201,34 @@ def _read_call_stays_in_workspace(args: dict[str, Any], workspace: str) -> bool:
     return inspected > 0 or bool(workspace)
 
 
-def _load_gemini_settings_fallback() -> dict[str, Any]:
+def _resolve_gemini_home(env: dict[str, str] | None = None) -> Path | None:
+    """Resolve ``~/.gemini`` respecting isolated *env* mappings in tests."""
+    if env is not None:
+        gem = env.get("GEMINI_HOME", "").strip()
+        if gem:
+            return Path(gem).expanduser()
+        cli_home = env.get("GEMINI_CLI_HOME", "").strip()
+        if cli_home:
+            return Path(cli_home).expanduser() / ".gemini"
+        home = env.get("HOME", "").strip() or env.get("USERPROFILE", "").strip()
+        if home:
+            return Path(home) / ".gemini"
+        return None
+    gem = os.environ.get("GEMINI_HOME", "").strip()
+    if gem:
+        return Path(gem).expanduser()
+    cli_home = os.environ.get("GEMINI_CLI_HOME", "").strip()
+    if cli_home:
+        return Path(cli_home).expanduser() / ".gemini"
+    return Path.home() / ".gemini"
+
+
+def _load_gemini_settings_fallback(env: dict[str, str] | None = None) -> dict[str, Any]:
     """Read optional ``settings.json`` under ``$GEMINI_HOME/antigravity-acp`` if present."""
-    gemini_home = os.environ.get("GEMINI_HOME") or os.path.expanduser("~/.gemini")
-    settings_path = Path(gemini_home) / "antigravity-acp" / "settings.json"
+    gemini_home = _resolve_gemini_home(env)
+    if gemini_home is None:
+        return {}
+    settings_path = gemini_home / "antigravity-acp" / "settings.json"
     try:
         if settings_path.is_file():
             data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -195,10 +240,10 @@ def _load_gemini_settings_fallback() -> dict[str, Any]:
 
 
 def resolve_sdk_auth_config(env: dict[str, str] | None = None) -> dict[str, Any]:
-    """Resolve API-key or Vertex AI auth settings from environment / settings.json.
+    """Resolve Vertex AI, Gemini API key, or Google Antigravity OAuth (CCPA) credentials.
 
     Raises ``PermissionError`` containing Antigravity's ``signed_out_signature`` phrase
-    when neither an API key nor a Vertex AI project is configured.
+    when no authentication method is configured.
     """
     environ = env if env is not None else dict(os.environ)
     api_key = environ.get("GEMINI_API_KEY") or environ.get("GOOGLE_API_KEY") or ""
@@ -210,7 +255,7 @@ def resolve_sdk_auth_config(env: dict[str, str] | None = None) -> dict[str, Any]
     )
 
     if not api_key and not (use_vertex and project):
-        settings = _load_gemini_settings_fallback()
+        settings = _load_gemini_settings_fallback(env)
         raw_gcp = settings.get("gcp")
         gcp: dict[str, Any] = raw_gcp if isinstance(raw_gcp, dict) else {}
         raw_auth = settings.get("auth")
@@ -226,6 +271,7 @@ def resolve_sdk_auth_config(env: dict[str, str] | None = None) -> dict[str, Any]
 
     if use_vertex and (project or api_key):
         return {
+            "mode": "vertex",
             "vertex": True,
             "project": project or None,
             "location": location or "us-central1",
@@ -233,15 +279,25 @@ def resolve_sdk_auth_config(env: dict[str, str] | None = None) -> dict[str, Any]
         }
     if api_key:
         return {
+            "mode": "api_key",
             "vertex": False,
             "project": None,
             "location": None,
             "api_key": api_key,
         }
+    if has_valid_oauth_token_file(env):
+        return {
+            "mode": "oauth",
+            "vertex": False,
+            "project": None,
+            "location": None,
+            "api_key": None,
+        }
 
     raise PermissionError(
-        "No authentication method selected: set GEMINI_API_KEY in the environment "
-        "(or configure GOOGLE_GENAI_USE_VERTEXAI=true and GOOGLE_CLOUD_PROJECT for Vertex AI)."
+        "No authentication method selected: sign in with Google Antigravity OAuth "
+        "(oauth-personal), set GEMINI_API_KEY in the environment, or configure "
+        "GOOGLE_GENAI_USE_VERTEXAI=true and GOOGLE_CLOUD_PROJECT for Vertex AI."
     )
 
 
@@ -252,8 +308,10 @@ class _SdkSessionState:
     session_id: str
     cwd: str
     mcp_servers_raw: list[dict[str, Any]] = field(default_factory=list)
+    auth_mode: str = "api_key"
     model_id: str = DEFAULT_MODEL_ID
     thinking_level: str = DEFAULT_THINKING_LEVEL
+    explicit_thinking_level: str | None = None
     mode: str = "default"
     dirty_config: bool = True
     strategy_cm: Any = None
@@ -261,6 +319,8 @@ class _SdkSessionState:
     call_seq: int = 0
     gated_step_call_ids: dict[str, str] = field(default_factory=dict)
     ungated_step_call_ids: dict[str, str] = field(default_factory=dict)
+    prompt_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    pending_permissions: int = 0
 
     def next_call_id(self) -> str:
         self.call_seq += 1
@@ -288,21 +348,42 @@ StrategyFactory = Callable[
 class AntigravitySdkAcpServer:
     """Async newline-delimited JSON-RPC 2.0 ACP server over ``stdin`` / ``stdout``."""
 
+    _initial_thinking_hint_secs: float = _INITIAL_THINKING_HINT_SECS
+    _thinking_keepalive_interval_secs: float = _THINKING_KEEPALIVE_INTERVAL_SECS
+
     def __init__(
         self,
         *,
         send_line: Callable[[str], Awaitable[None]] | None = None,
         strategy_factory: StrategyFactory | None = None,
         env: dict[str, str] | None = None,
+        oauth_manager: CcpaOAuthManager | None = None,
     ) -> None:
         self._send_line = send_line or self._default_stdout_write
         self._strategy_factory = strategy_factory or self._build_sdk_conversation_cm
         self._env = env
+        self._user_agent = build_aidev_user_agent()
+        self._oauth_mgr: CcpaOAuthManager | None = oauth_manager
+        self._ccpa_proxy: CcpaLoopbackProxy | None = None
         self._write_lock = asyncio.Lock()
         self._next_rpc_id = 1
         self._pending_client_rpcs: dict[int | str, asyncio.Future[dict[str, Any]]] = {}
         self._sessions: dict[str, _SdkSessionState] = {}
         self._in_flight_tasks: set[asyncio.Task[None]] = set()
+
+    def _ensure_oauth_manager(self) -> CcpaOAuthManager:
+        if self._oauth_mgr is None:
+            self._oauth_mgr = CcpaOAuthManager(env=self._env, user_agent=self._user_agent)
+        else:
+            self._oauth_mgr.user_agent = self._user_agent
+        return self._oauth_mgr
+
+    def _ensure_ccpa_proxy(self) -> CcpaLoopbackProxy:
+        mgr = self._ensure_oauth_manager()
+        if self._ccpa_proxy is None:
+            self._ccpa_proxy = CcpaLoopbackProxy(oauth_mgr=mgr)
+        self._ccpa_proxy.start()
+        return self._ccpa_proxy
 
     @staticmethod
     async def _default_stdout_write(line: str) -> None:
@@ -348,8 +429,21 @@ class AntigravitySdkAcpServer:
 
     # ── Session config option envelopes ──
 
-    @staticmethod
-    def _session_envelope(session: _SdkSessionState, *, include_id: bool) -> dict[str, Any]:
+    def _session_envelope(
+        self,
+        session: _SdkSessionState,
+        *,
+        include_id: bool,
+        catalog: CcpaCatalog | None = None,
+    ) -> dict[str, Any]:
+        if session.auth_mode == "oauth" and catalog is not None:
+            return catalog.build_session_envelope(
+                concrete_model_id=session.model_id,
+                mode=session.mode,
+                session_modes=SESSION_MODES,
+                session_id=session.session_id if include_id else None,
+            )
+
         model_options = [{"value": mid, "name": mname} for mid, mname in DEFAULT_ANTIGRAVITY_MODELS]
         if all(opt["value"] != session.model_id for opt in model_options):
             model_options.insert(0, {"value": session.model_id, "name": session.model_id})
@@ -410,6 +504,15 @@ class AntigravitySdkAcpServer:
             out["sessionId"] = session.session_id
         return out
 
+    def _context_window_for_session(self, session: _SdkSessionState) -> int:
+        if session.auth_mode == "oauth" and self._oauth_mgr is not None:
+            cached = getattr(self._oauth_mgr, "_cached_catalog", None)
+            if cached is not None:
+                return cached[0].context_window_for(
+                    session.model_id, ANTIGRAVITY_CONTEXT_WINDOW_TOKENS
+                )
+        return ANTIGRAVITY_CONTEXT_WINDOW_TOKENS
+
     # ── SDK Strategy Construction ──
 
     def _build_sdk_conversation_cm(
@@ -428,23 +531,11 @@ class AntigravitySdkAcpServer:
             "medium": types.ThinkingLevel.MEDIUM,
             "high": types.ThinkingLevel.HIGH,
             "extra_high": types.ThinkingLevel.EXTRA_HIGH,
+            "xhigh": types.ThinkingLevel.EXTRA_HIGH,
+            "max": types.ThinkingLevel.HIGH,
         }
-        thinking_enum = thinking_map.get(session.thinking_level, types.ThinkingLevel.HIGH)
+        thinking_enum = thinking_map.get(session.thinking_level, types.ThinkingLevel.LOW)
         model_opts = types.GeminiModelOptions(thinking_level=thinking_enum)
-
-        if auth["vertex"]:
-            endpoint: Any = types.VertexEndpoint(
-                project=auth["project"],
-                location=auth["location"],
-                api_key=auth["api_key"],
-                options=model_opts,
-            )
-        else:
-            endpoint = types.GeminiAPIEndpoint(
-                api_key=auth["api_key"],
-                options=model_opts,
-            )
-        model_target = types.ModelTarget(name=session.model_id, endpoint=endpoint)
 
         mcp_configs: list[Any] = []
         for entry in session.mcp_servers_raw:
@@ -504,11 +595,9 @@ class AntigravitySdkAcpServer:
                 rules.extend(policy.ask_user(mcp_cfg, handler=approval_handler))
             rules.append(policy.ask_user("*", handler=approval_handler))
 
-        gemini_home = (self._env or os.environ).get("GEMINI_HOME") or os.path.expanduser(
-            "~/.gemini"
-        )
-        save_dir = str(Path(gemini_home) / "antigravity-sdk-acp" / "trajectories")
-        app_data_dir = str(Path(gemini_home) / "antigravity-sdk-acp" / "appdata")
+        gemini_home = _resolve_gemini_home(self._env) or (Path.home() / ".gemini")
+        save_dir = str(gemini_home / "antigravity-sdk-acp" / "trajectories")
+        app_data_dir = str(gemini_home / "antigravity-sdk-acp" / "appdata")
         os.makedirs(save_dir, exist_ok=True)
         os.makedirs(app_data_dir, exist_ok=True)
 
@@ -517,17 +606,81 @@ class AntigravitySdkAcpServer:
             if len(session.session_id) >= 32
             else str(uuid.uuid5(uuid.NAMESPACE_URL, f"kirocrew-antigravity:{session.session_id}"))
         )
-        cfg = LocalAgentConfig(
-            model=model_target,
-            workspaces=[session.cwd] if session.cwd else None,
-            mcp_servers=mcp_configs or None,
-            policies=rules,
-            conversation_id=conv_id,
-            session_continuation_mode=types.SessionContinuationMode.CREATE_OR_RESUME,
-            save_dir=save_dir,
-            app_data_dir=app_data_dir,
-            env=dict(self._env) if self._env is not None else None,
-        )
+
+        if auth["mode"] == "oauth":
+            proxy = self._ensure_ccpa_proxy()
+            proxy_base_url = proxy.base_url
+            proxy_secret = proxy.secret_token
+            acp_sid = session.session_id
+
+            class _CcpaProxyAgentConfig(LocalAgentConfig):
+                def create_strategy(self, *, tool_runner: Any, hook_runner: Any) -> Any:
+                    strategy = super().create_strategy(
+                        tool_runner=tool_runner, hook_runner=hook_runner
+                    )
+                    orig_build = strategy._build_harness_config
+
+                    def _patched_build_harness_config() -> Any:
+                        hc = orig_build()
+                        for model_proto in hc.models:
+                            model_proto.gemini_api_endpoint.base_url = proxy_base_url
+                            model_proto.gemini_api_endpoint.http_headers[
+                                "X-ACP-Proxy-Token"
+                            ] = proxy_secret
+                            model_proto.gemini_api_endpoint.http_headers[
+                                "X-ACP-Session-Id"
+                            ] = acp_sid
+                        return hc
+
+                    strategy._build_harness_config = _patched_build_harness_config
+                    return strategy
+
+            # CCPA leveled models (e.g. gemini-3.8-flash-low, gemini-4-argon-low) encode
+            # their thinking tier in the model ID; omitting redundant thinkingLevel avoids
+            # rejecting unleveled CCPA models while the loopback proxy injects includeThoughts.
+            oauth_target = types.ModelTarget(
+                name=session.model_id,
+                types=[types.ModelType.TEXT],
+                endpoint=types.GeminiAPIEndpoint(api_key="dummy_api_key"),
+            )
+            cfg: LocalAgentConfig = _CcpaProxyAgentConfig(
+                api_key="dummy_api_key",
+                models=[oauth_target],
+                workspaces=[session.cwd] if session.cwd else None,
+                mcp_servers=mcp_configs or None,
+                policies=rules,
+                conversation_id=conv_id,
+                session_continuation_mode=types.SessionContinuationMode.CREATE_OR_RESUME,
+                save_dir=save_dir,
+                app_data_dir=app_data_dir,
+                env=dict(self._env) if self._env is not None else None,
+            )
+        else:
+            if auth["vertex"]:
+                endpoint: Any = types.VertexEndpoint(
+                    project=auth["project"],
+                    location=auth["location"],
+                    api_key=auth["api_key"],
+                    options=model_opts,
+                )
+            else:
+                endpoint = types.GeminiAPIEndpoint(
+                    api_key=auth["api_key"],
+                    options=model_opts,
+                )
+            model_target = types.ModelTarget(name=session.model_id, endpoint=endpoint)
+            cfg = LocalAgentConfig(
+                model=model_target,
+                workspaces=[session.cwd] if session.cwd else None,
+                mcp_servers=mcp_configs or None,
+                policies=rules,
+                conversation_id=conv_id,
+                session_continuation_mode=types.SessionContinuationMode.CREATE_OR_RESUME,
+                save_dir=save_dir,
+                app_data_dir=app_data_dir,
+                env=dict(self._env) if self._env is not None else None,
+            )
+
         agent = Agent(config=cfg)
 
         @contextlib.asynccontextmanager
@@ -623,20 +776,25 @@ class AntigravitySdkAcpServer:
                 0, {"optionId": "allow_always", "name": "Allow Always", "kind": "allow_always"}
             )
 
-        resp = await self._call_client(
-            "session/request_permission",
-            {
-                "sessionId": session.session_id,
-                "toolCall": {
-                    "toolCallId": call_id,
-                    "title": title,
-                    "kind": kind,
-                    "status": "pending",
-                    "rawInput": raw_input,
+        session.pending_permissions += 1
+        try:
+            resp = await self._call_client(
+                "session/request_permission",
+                {
+                    "sessionId": session.session_id,
+                    "toolCall": {
+                        "toolCallId": call_id,
+                        "title": title,
+                        "kind": kind,
+                        "status": "pending",
+                        "rawInput": raw_input,
+                    },
+                    "options": options,
                 },
-                "options": options,
-            },
-        )
+            )
+        finally:
+            session.pending_permissions = max(0, session.pending_permissions - 1)
+
         raw_res = resp.get("result")
         result: dict[str, Any] = raw_res if isinstance(raw_res, dict) else {}
         raw_out = result.get("outcome")
@@ -725,7 +883,7 @@ class AntigravitySdkAcpServer:
             {
                 "sessionUpdate": "usage_update",
                 "used": int(used or 0),
-                "size": ANTIGRAVITY_CONTEXT_WINDOW_TOKENS,
+                "size": self._context_window_for_session(session),
             },
         )
 
@@ -735,10 +893,11 @@ class AntigravitySdkAcpServer:
             conn = getattr(session.conversation, "connection", None)
             usage = getattr(conn, "cumulative_usage", None)
             used = int(getattr(usage, "total_token_count", 0) or 0)
-        pct = (used / ANTIGRAVITY_CONTEXT_WINDOW_TOKENS) * 100.0
+        window = self._context_window_for_session(session)
+        pct = (used / window) * 100.0 if window > 0 else 0.0
         summary = (
             f"Google Antigravity SDK context usage: {used:,} / "
-            f"{ANTIGRAVITY_CONTEXT_WINDOW_TOKENS:,} tokens ({pct:.2f}%) "
+            f"{window:,} tokens ({pct:.2f}%) "
             f"[model={session.model_id}, thinking={session.thinking_level}]"
         )
         await self._send_session_update(
@@ -746,7 +905,7 @@ class AntigravitySdkAcpServer:
             {
                 "sessionUpdate": "usage_update",
                 "used": used,
-                "size": ANTIGRAVITY_CONTEXT_WINDOW_TOKENS,
+                "size": window,
             },
         )
         await self._send_session_update(
@@ -760,7 +919,15 @@ class AntigravitySdkAcpServer:
 
     # ── RPC Method Handlers ──
 
-    async def _on_initialize(self, req_id: Any, _params: dict[str, Any]) -> None:
+    async def _on_initialize(self, req_id: Any, params: dict[str, Any]) -> None:
+        client_info = params.get("clientInfo")
+        if isinstance(client_info, dict):
+            cname = str(client_info.get("name") or "kiro-crew")
+            cver = str(client_info.get("version") or "0.13.0")
+            self._user_agent = build_aidev_user_agent(cname, cver)
+            if self._oauth_mgr is not None:
+                self._oauth_mgr.user_agent = self._user_agent
+
         await self._send_result(
             req_id,
             {
@@ -781,6 +948,11 @@ class AntigravitySdkAcpServer:
                 },
                 "authMethods": [
                     {
+                        "id": "oauth-personal",
+                        "name": "Log in with Google",
+                        "description": "Sign in with Google Antigravity OAuth",
+                    },
+                    {
                         "id": "gemini-api-key",
                         "name": "Gemini API key",
                         "description": "Set GEMINI_API_KEY in the gateway or agent environment",
@@ -799,12 +971,72 @@ class AntigravitySdkAcpServer:
             },
         )
 
-    async def _on_session_new(self, req_id: Any, params: dict[str, Any]) -> None:
+    async def _on_authenticate(self, req_id: Any, params: dict[str, Any]) -> None:
+        method_id = str(params.get("methodId") or "oauth-personal")
+        if method_id == "oauth-personal":
+            if has_valid_oauth_token_file(self._env):
+                try:
+                    await asyncio.to_thread(self._ensure_oauth_manager().get_session_target)
+                    await self._send_result(req_id, {})
+                    return
+                except Exception:  # noqa: BLE001
+                    pass
+            # Delegate interactive browser OAuth sign-in to standalone agy_acp_server if installed.
+            standalone_bin = shutil.which("agy_acp_server.par") or shutil.which("agy_acp_server")
+            if standalone_bin:
+                proc = await asyncio.create_subprocess_exec(
+                    standalone_bin,
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                try:
+                    assert proc.stdin is not None and proc.stdout is not None
+                    for rpc in (
+                        {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": 1}},
+                        {"jsonrpc": "2.0", "id": 2, "method": "authenticate", "params": {"methodId": "oauth-personal"}},
+                    ):
+                        proc.stdin.write((json.dumps(rpc) + "\n").encode("utf-8"))
+                        await proc.stdin.drain()
+                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=180.0)
+                        if not line:
+                            break
+                        reply = json.loads(line.decode("utf-8", "replace"))
+                        if reply.get("id") == 2 and "result" in reply:
+                            await self._send_result(req_id, {})
+                            return
+                finally:
+                    with contextlib.suppress(ProcessLookupError):
+                        proc.terminate()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+
         try:
             resolve_sdk_auth_config(self._env)
+            await self._send_result(req_id, {})
+        except PermissionError as exc:
+            await self._send_error(req_id, -32000, str(exc))
+
+    async def _on_session_new(self, req_id: Any, params: dict[str, Any]) -> None:
+        try:
+            auth = resolve_sdk_auth_config(self._env)
         except PermissionError as exc:
             await self._send_error(req_id, -32000, str(exc))
             return
+
+        catalog: CcpaCatalog | None = None
+        model_id = DEFAULT_MODEL_ID
+        thinking_level = DEFAULT_THINKING_LEVEL
+        if auth["mode"] == "oauth":
+            try:
+                oauth_mgr = self._ensure_oauth_manager()
+                catalog = await asyncio.to_thread(oauth_mgr.get_catalog)
+                model_id, thinking_level = catalog.resolve_initial_model(
+                    oauth_mgr.default_model_preference()
+                )
+            except PermissionError as exc:
+                await self._send_error(req_id, -32000, str(exc))
+                return
 
         cwd = str(params.get("cwd") or os.getcwd())
         mcp_servers = params.get("mcpServers")
@@ -814,13 +1046,19 @@ class AntigravitySdkAcpServer:
             session_id=session_id,
             cwd=cwd,
             mcp_servers_raw=mcp_list,
+            auth_mode=auth["mode"],
+            model_id=model_id,
+            thinking_level=thinking_level,
+            explicit_thinking_level=None,
         )
         self._sessions[session_id] = session
-        await self._send_result(req_id, self._session_envelope(session, include_id=True))
+        await self._send_result(
+            req_id, self._session_envelope(session, include_id=True, catalog=catalog)
+        )
 
     async def _on_session_load(self, req_id: Any, params: dict[str, Any]) -> None:
         try:
-            resolve_sdk_auth_config(self._env)
+            auth = resolve_sdk_auth_config(self._env)
         except PermissionError as exc:
             await self._send_error(req_id, -32000, str(exc))
             return
@@ -829,15 +1067,34 @@ class AntigravitySdkAcpServer:
         if not session_id:
             await self._send_error(req_id, -32602, "sessionId is required")
             return
+
+        catalog: CcpaCatalog | None = None
+        if auth["mode"] == "oauth":
+            try:
+                catalog = await asyncio.to_thread(self._ensure_oauth_manager().get_catalog)
+            except PermissionError as exc:
+                await self._send_error(req_id, -32000, str(exc))
+                return
+
         cwd = str(params.get("cwd") or os.getcwd())
         mcp_servers = params.get("mcpServers")
         mcp_list = list(mcp_servers) if isinstance(mcp_servers, list) else []
         session = self._sessions.get(session_id)
         if session is None:
+            model_id = DEFAULT_MODEL_ID
+            thinking_level = DEFAULT_THINKING_LEVEL
+            if auth["mode"] == "oauth" and catalog is not None:
+                model_id, thinking_level = catalog.resolve_initial_model(
+                    self._ensure_oauth_manager().default_model_preference()
+                )
             session = _SdkSessionState(
                 session_id=session_id,
                 cwd=cwd,
                 mcp_servers_raw=mcp_list,
+                auth_mode=auth["mode"],
+                model_id=model_id,
+                thinking_level=thinking_level,
+                explicit_thinking_level=None,
             )
             self._sessions[session_id] = session
         else:
@@ -845,7 +1102,9 @@ class AntigravitySdkAcpServer:
             if mcp_list:
                 session.mcp_servers_raw = mcp_list
                 session.dirty_config = True
-        await self._send_result(req_id, self._session_envelope(session, include_id=False))
+        await self._send_result(
+            req_id, self._session_envelope(session, include_id=False, catalog=catalog)
+        )
 
     async def _on_set_config_option(self, req_id: Any, params: dict[str, Any]) -> None:
         session_id = str(params.get("sessionId") or "")
@@ -853,6 +1112,10 @@ class AntigravitySdkAcpServer:
         if session is None:
             await self._send_error(req_id, -32602, f"Session not found: {session_id}")
             return
+
+        catalog: CcpaCatalog | None = None
+        if session.auth_mode == "oauth":
+            catalog = await asyncio.to_thread(self._ensure_oauth_manager().get_catalog)
 
         config_id = str(params.get("configId") or params.get("id") or "")
         value = str(params.get("value") or "")
@@ -872,22 +1135,60 @@ class AntigravitySdkAcpServer:
             if not value:
                 await self._send_error(req_id, -32602, "Model value cannot be empty")
                 return
-            if session.model_id != value:
-                session.model_id = value
-                session.dirty_config = True
+            if session.auth_mode == "oauth" and catalog is not None:
+                resolved = catalog.resolve_model_switch(
+                    value,
+                    explicit_thinking_level=session.explicit_thinking_level,
+                )
+                if resolved is None:
+                    await self._send_error(req_id, -32602, f"Unknown model: {value!r}")
+                    return
+                new_model, new_level = resolved
+                if session.model_id != new_model or session.thinking_level != new_level:
+                    session.model_id = new_model
+                    session.thinking_level = new_level
+                    session.dirty_config = True
+            else:
+                target_level = session.explicit_thinking_level or DEFAULT_THINKING_LEVEL
+                if session.model_id != value or session.thinking_level != target_level:
+                    session.model_id = value
+                    session.thinking_level = target_level
+                    session.dirty_config = True
         elif config_id == "thinking_level":
-            valid_thinking = {t[0] for t in THINKING_OPTIONS} | {"minimal", "extra_high"}
+            valid_thinking = {t[0] for t in THINKING_OPTIONS} | {
+                "minimal",
+                "extra_high",
+                "xhigh",
+                "max",
+            }
             if value not in valid_thinking:
                 await self._send_error(req_id, -32602, f"Unsupported thinking_level: {value!r}")
                 return
-            if session.thinking_level != value:
-                session.thinking_level = value
-                session.dirty_config = True
+            if session.auth_mode == "oauth" and catalog is not None:
+                switched = catalog.resolve_thinking_switch(session.model_id, value)
+                if switched is None:
+                    await self._send_error(
+                        req_id,
+                        -32602,
+                        f"Thinking level {value!r} is not supported on {session.model_id}",
+                    )
+                    return
+                new_model, new_level = switched
+                session.explicit_thinking_level = new_level
+                if session.model_id != new_model or session.thinking_level != new_level:
+                    session.model_id = new_model
+                    session.thinking_level = new_level
+                    session.dirty_config = True
+            else:
+                session.explicit_thinking_level = value
+                if session.thinking_level != value:
+                    session.thinking_level = value
+                    session.dirty_config = True
         else:
             await self._send_error(req_id, -32602, f"Unknown config option: {config_id!r}")
             return
 
-        envelope = self._session_envelope(session, include_id=False)
+        envelope = self._session_envelope(session, include_id=False, catalog=catalog)
         await self._send_result(req_id, {"configOptions": envelope["configOptions"]})
 
     async def _on_set_mode(self, req_id: Any, params: dict[str, Any]) -> None:
@@ -909,130 +1210,234 @@ class AntigravitySdkAcpServer:
             await self._handle_slash_usage(req_id, session)
             return
 
-        try:
-            conv = await self._ensure_conversation(session)
-        except PermissionError as exc:
-            await self._send_error(req_id, -32000, str(exc))
-            return
-        except Exception as exc:  # noqa: BLE001
-            await self._send_error(
-                req_id, -32603, f"Failed to start Antigravity SDK session: {exc}"
+        async with session.prompt_lock:
+            try:
+                conv = await self._ensure_conversation(session)
+            except PermissionError as exc:
+                await self._send_error(req_id, -32000, str(exc))
+                return
+            except Exception as exc:  # noqa: BLE001
+                await self._send_error(
+                    req_id, -32603, f"Failed to start Antigravity SDK session: {exc}"
+                )
+                return
+
+            await self._emit_usage_if_present(session, conv)
+
+            prompt_payload: Any = (
+                parts[0] if len(parts) == 1 and isinstance(parts[0], str) else parts
             )
-            return
 
-        await self._emit_usage_if_present(session, conv)
+            # Anti-stall thinking progress state for pre-HTTP-200 server-side reasoning.
+            now_init = time.monotonic()
+            step_wait_started = now_init
+            last_visible_emit = now_init
+            emitted_real_model_chunk = False
+            emitted_initial_hint = False
 
-        prompt_payload: Any = parts[0] if len(parts) == 1 and isinstance(parts[0], str) else parts
-        try:
-            await conv.send(prompt_payload)
-            async for step in conv.receive_steps():
-                source_val = getattr(
-                    getattr(step, "source", None), "value", getattr(step, "source", "")
-                )
-                target_val = getattr(
-                    getattr(step, "target", None), "value", getattr(step, "target", "")
-                )
-                status_val = getattr(
-                    getattr(step, "status", None), "value", getattr(step, "status", "")
-                )
-
-                is_model = str(source_val).upper().endswith("MODEL")
-                is_user_target = str(target_val).upper().endswith("USER") or not target_val
-                is_done = str(status_val).upper().endswith("DONE")
-                is_error = str(status_val).upper().endswith("ERROR")
-
-                if is_model and is_user_target and not is_error:
-                    thought_delta = getattr(step, "thinking_delta", "") or ""
-                    if thought_delta:
+            async def _thinking_watchdog() -> None:
+                nonlocal step_wait_started, last_visible_emit, emitted_initial_hint
+                tick = max(0.02, min(0.25, self._initial_thinking_hint_secs / 2.0))
+                while True:
+                    await asyncio.sleep(tick)
+                    now = time.monotonic()
+                    if session.pending_permissions > 0:
+                        step_wait_started = now
+                        last_visible_emit = now
+                        continue
+                    if emitted_real_model_chunk:
+                        continue
+                    if (
+                        not emitted_initial_hint
+                        and (now - step_wait_started) >= self._initial_thinking_hint_secs
+                    ):
+                        emitted_initial_hint = True
+                        last_visible_emit = now
                         await self._send_session_update(
                             session.session_id,
                             {
                                 "sessionUpdate": "agent_thought_chunk",
-                                "content": {"type": "text", "text": str(thought_delta)},
+                                "content": {
+                                    "type": "text",
+                                    "text": f"[{session.model_id}] 正在思考...\n",
+                                },
                             },
                         )
-                    text_delta = getattr(step, "content_delta", "") or ""
-                    if text_delta:
+                    elif (now - last_visible_emit) >= self._thinking_keepalive_interval_secs:
+                        last_visible_emit = now
+                        elapsed = max(1, int(now - step_wait_started))
+                        act = (
+                            self._ccpa_proxy.snapshot_activity(session.session_id)
+                            if self._ccpa_proxy is not None
+                            else None
+                        )
+                        if act is not None and act.thoughts_token_count > 0:
+                            progress_text = (
+                                f"仍在思考中（已耗时 {elapsed}s，"
+                                f"思考 {act.thoughts_token_count} tokens）...\n"
+                            )
+                        else:
+                            progress_text = f"仍在思考中（已耗时 {elapsed}s）...\n"
                         await self._send_session_update(
                             session.session_id,
                             {
-                                "sessionUpdate": "agent_message_chunk",
-                                "content": {"type": "text", "text": str(text_delta)},
+                                "sessionUpdate": "agent_thought_chunk",
+                                "content": {"type": "text", "text": progress_text},
                             },
                         )
 
-                tool_calls = getattr(step, "tool_calls", None) or []
-                for tc in tool_calls:
-                    step_key = str(
-                        getattr(tc, "step_id", "")
-                        or getattr(tc, "id", "")
-                        or getattr(step, "id", "")
+            watchdog_task = asyncio.create_task(_thinking_watchdog())
+            try:
+                await conv.send(prompt_payload)
+                async for step in conv.receive_steps():
+                    source_val = getattr(
+                        getattr(step, "source", None), "value", getattr(step, "source", "")
                     )
-                    fifo_key = f"__pending__:{getattr(tc, 'server_name', '') or ''}:{getattr(tc, 'name', '')}"
-                    gated_id = session.gated_step_call_ids.get(
-                        step_key
-                    ) or session.gated_step_call_ids.get(fifo_key)
+                    target_val = getattr(
+                        getattr(step, "target", None), "value", getattr(step, "target", "")
+                    )
+                    status_val = getattr(
+                        getattr(step, "status", None), "value", getattr(step, "status", "")
+                    )
+                    parent_traj = str(getattr(step, "parent_trajectory_id", "") or "")
 
-                    if gated_id:
-                        if is_done or is_error:
-                            session.gated_step_call_ids.pop(step_key, None)
-                            session.gated_step_call_ids.pop(fifo_key, None)
-                            raw_out = (
-                                getattr(step, "error", "")
-                                if is_error
-                                else (getattr(step, "content", "") or "ok")
-                            )
+                    is_model = str(source_val).upper().endswith("MODEL")
+                    is_user_target = str(target_val).upper().endswith("USER") or not target_val
+                    is_done = str(status_val).upper().endswith("DONE")
+                    is_error = str(status_val).upper().endswith("ERROR")
+
+                    # Stream reasoning from ALL root model steps (both StepTarget.ENVIRONMENT
+                    # tool-planning turns and StepTarget.USER answer turns) into ThinkingBlock.
+                    if is_model and not is_error and not parent_traj:
+                        thought_delta = str(getattr(step, "thinking_delta", "") or "")
+                        text_delta = str(getattr(step, "content_delta", "") or "")
+                        if thought_delta:
+                            emitted_real_model_chunk = True
+                            last_visible_emit = time.monotonic()
                             await self._send_session_update(
                                 session.session_id,
                                 {
-                                    "sessionUpdate": "tool_call_update",
-                                    "toolCallId": gated_id,
-                                    "status": "failed" if is_error else "completed",
-                                    "rawOutput": raw_out,
+                                    "sessionUpdate": "agent_thought_chunk",
+                                    "content": {"type": "text", "text": thought_delta},
                                 },
                             )
-                    else:
-                        ungated_id = session.ungated_step_call_ids.get(step_key)
-                        if ungated_id is None:
-                            ungated_id = session.next_call_id()
-                            if step_key:
-                                session.ungated_step_call_ids[step_key] = ungated_id
-                            kind, title, raw_input, meta = self._format_tool_wire_fields(tc)
-                            update_frame: dict[str, Any] = {
-                                "sessionUpdate": "tool_call",
-                                "toolCallId": ungated_id,
-                                "title": title,
-                                "kind": kind,
-                                "status": "pending",
-                                "rawInput": raw_input,
-                            }
-                            if meta is not None:
-                                update_frame["_meta"] = meta
-                            await self._send_session_update(session.session_id, update_frame)
-                        if is_done or is_error:
-                            session.ungated_step_call_ids.pop(step_key, None)
+                        if is_user_target:
+                            if text_delta:
+                                emitted_real_model_chunk = True
+                                last_visible_emit = time.monotonic()
+                                await self._send_session_update(
+                                    session.session_id,
+                                    {
+                                        "sessionUpdate": "agent_message_chunk",
+                                        "content": {"type": "text", "text": text_delta},
+                                    },
+                                )
+                        elif not thought_delta and text_delta:
+                            # Short tool-planning step where CCPA returned an intent line in
+                            # content_delta on StepTarget.ENVIRONMENT: surface it in ThinkingBlock.
+                            emitted_real_model_chunk = True
+                            last_visible_emit = time.monotonic()
+                            formatted = (
+                                text_delta if text_delta.endswith("\n") else f"{text_delta}\n"
+                            )
                             await self._send_session_update(
                                 session.session_id,
                                 {
-                                    "sessionUpdate": "tool_call_update",
+                                    "sessionUpdate": "agent_thought_chunk",
+                                    "content": {"type": "text", "text": formatted},
+                                },
+                            )
+
+                    tool_calls = getattr(step, "tool_calls", None) or []
+                    for tc in tool_calls:
+                        step_key = str(
+                            getattr(tc, "step_id", "")
+                            or getattr(tc, "id", "")
+                            or getattr(step, "id", "")
+                        )
+                        fifo_key = (
+                            f"__pending__:{getattr(tc, 'server_name', '') or ''}:"
+                            f"{getattr(tc, 'name', '')}"
+                        )
+                        gated_id = session.gated_step_call_ids.get(
+                            step_key
+                        ) or session.gated_step_call_ids.get(fifo_key)
+
+                        if gated_id:
+                            if is_done or is_error:
+                                session.gated_step_call_ids.pop(step_key, None)
+                                session.gated_step_call_ids.pop(fifo_key, None)
+                                raw_out = (
+                                    getattr(step, "error", "")
+                                    if is_error
+                                    else (getattr(step, "content", "") or "ok")
+                                )
+                                await self._send_session_update(
+                                    session.session_id,
+                                    {
+                                        "sessionUpdate": "tool_call_update",
+                                        "toolCallId": gated_id,
+                                        "status": "failed" if is_error else "completed",
+                                        "rawOutput": raw_out,
+                                    },
+                                )
+                                now_done = time.monotonic()
+                                step_wait_started = now_done
+                                last_visible_emit = now_done
+                                emitted_real_model_chunk = False
+                                emitted_initial_hint = False
+                        else:
+                            ungated_id = session.ungated_step_call_ids.get(step_key)
+                            if ungated_id is None:
+                                ungated_id = session.next_call_id()
+                                if step_key:
+                                    session.ungated_step_call_ids[step_key] = ungated_id
+                                kind, title, raw_input, meta = self._format_tool_wire_fields(tc)
+                                update_frame: dict[str, Any] = {
+                                    "sessionUpdate": "tool_call",
                                     "toolCallId": ungated_id,
-                                    "status": "failed" if is_error else "completed",
-                                    "rawOutput": (
-                                        getattr(step, "error", "")
-                                        if is_error
-                                        else (getattr(step, "content", "") or "ok")
-                                    ),
-                                },
-                            )
+                                    "title": title,
+                                    "kind": kind,
+                                    "status": "pending",
+                                    "rawInput": raw_input,
+                                }
+                                if meta is not None:
+                                    update_frame["_meta"] = meta
+                                last_visible_emit = time.monotonic()
+                                await self._send_session_update(session.session_id, update_frame)
+                            if is_done or is_error:
+                                session.ungated_step_call_ids.pop(step_key, None)
+                                await self._send_session_update(
+                                    session.session_id,
+                                    {
+                                        "sessionUpdate": "tool_call_update",
+                                        "toolCallId": ungated_id,
+                                        "status": "failed" if is_error else "completed",
+                                        "rawOutput": (
+                                            getattr(step, "error", "")
+                                            if is_error
+                                            else (getattr(step, "content", "") or "ok")
+                                        ),
+                                    },
+                                )
+                                now_done = time.monotonic()
+                                step_wait_started = now_done
+                                last_visible_emit = now_done
+                                emitted_real_model_chunk = False
+                                emitted_initial_hint = False
 
-            await self._emit_usage_if_present(session, conv)
-            await self._send_result(req_id, {"stopReason": "end_turn"})
-        except Exception as exc:  # noqa: BLE001
-            exc_name = type(exc).__name__
-            if "Cancelled" in exc_name or "cancelled" in str(exc).lower():
-                await self._send_result(req_id, {"stopReason": "cancelled"})
-                return
-            await self._send_error(req_id, -32603, str(exc))
+                await self._emit_usage_if_present(session, conv)
+                await self._send_result(req_id, {"stopReason": "end_turn"})
+            except Exception as exc:  # noqa: BLE001
+                exc_name = type(exc).__name__
+                if "Cancelled" in exc_name or "cancelled" in str(exc).lower():
+                    await self._send_result(req_id, {"stopReason": "cancelled"})
+                    return
+                await self._send_error(req_id, -32603, str(exc))
+            finally:
+                watchdog_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await watchdog_task
 
     async def _on_session_cancel(self, req_id: Any, params: dict[str, Any]) -> None:
         session_id = str(params.get("sessionId") or "")
@@ -1051,6 +1456,8 @@ class AntigravitySdkAcpServer:
     async def _on_session_close(self, req_id: Any, params: dict[str, Any]) -> None:
         session_id = str(params.get("sessionId") or "")
         session = self._sessions.pop(session_id, None)
+        if self._ccpa_proxy is not None and session_id:
+            self._ccpa_proxy.clear_session_activity(session_id)
         if session is not None:
             await session.close_runtime()
         if req_id is not None:
@@ -1096,6 +1503,7 @@ class AntigravitySdkAcpServer:
     async def _dispatch_request(self, req_id: Any, method: str, params: dict[str, Any]) -> None:
         handlers: dict[str, Callable[[Any, dict[str, Any]], Awaitable[None]]] = {
             "initialize": self._on_initialize,
+            "authenticate": self._on_authenticate,
             "session/new": self._on_session_new,
             "session/load": self._on_session_load,
             "session/set_config_option": self._on_set_config_option,
@@ -1125,6 +1533,9 @@ class AntigravitySdkAcpServer:
         for session in list(self._sessions.values()):
             await session.close_runtime()
         self._sessions.clear()
+        if self._ccpa_proxy is not None:
+            self._ccpa_proxy.stop()
+            self._ccpa_proxy = None
 
 
 async def serve_stdio() -> None:

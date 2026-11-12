@@ -18,6 +18,7 @@ from kiro_crew import model_registry, model_scope, platform_compat
 from kiro_crew.agent_sdk.backends import (
     ACP_BACKENDS_EFFORT_AT_LAUNCH,
     ACP_BACKENDS_EFFORT_FROM_ADVERTISED_OPTION,
+    default_background_model_for_namespace,
     effort_config_option_clear_value,
     launch_effort_supported,
     resolve_cc_permission_mode,
@@ -1052,12 +1053,21 @@ class KiroCrewConfig:
         # Kiro's namespace is ``acp``, so a supplied member route is unambiguous.
         if namespace is None:
             namespace = capabilities_for(self.agent.acp_backend).model_id_namespace
+        is_bg_worker = bool(agent and agent in BACKGROUND_WORKER_AGENTS)
+        bg_ns_default = default_background_model_for_namespace(namespace) if is_bg_worker else ""
         candidates: list[tuple[str, str]] = []
         if model_override:
             candidates.append((model_override, "model_override"))
+        if is_bg_worker:
+            role_bg = self.agent.role_models.get("background", "")
+            if role_bg and role_bg != DEFAULT_MODEL:
+                candidates.append((role_bg, "agent.role_models.background"))
         if agent and agent != "kirocrew":
             candidates.append((self._resolve_named_agent_model(agent), f"agent spec {agent}"))
-        candidates.append((global_model, "agent.model"))
+        if bg_ns_default:
+            candidates.append((bg_ns_default, "background namespace default"))
+        else:
+            candidates.append((global_model, "agent.model"))
         # A pin says WHAT was picked, never for WHICH harness, so a backend switch
         # hands the next session a model the new harness never served. Scope each
         # precedence tier to the namespace that will run it and let an out-of-scope
@@ -1070,8 +1080,11 @@ class KiroCrewConfig:
         else:
             return ""
         if m == DEFAULT_MODEL:
-            # The empty string is the nothing-pinned spelling every tier below reads.
-            return ""
+            if bg_ns_default:
+                m = bg_ns_default
+            else:
+                # The empty string is the nothing-pinned spelling every tier below reads.
+                return ""
         # ``to_acp_id``, not ``to_provider_id``, is the kiro-family choice because
         # kiro serves the registry aliases as distinct real models.
         translated = (

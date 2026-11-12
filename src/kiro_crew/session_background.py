@@ -290,6 +290,8 @@ class _ProviderBgSession:
     def __init__(self, sess: _BackgroundSessionEntry) -> None:
         self._sess = sess
         self._sem_held = False
+        self._turn_in_flight = False
+        self._cancel_sent = False
 
     @property
     def provider(self) -> LLMProvider:
@@ -313,6 +315,19 @@ class _ProviderBgSession:
             self._sem_held = False
             self._sess.semaphore.release()
 
+    async def _cancel_unfinished_and_release(self) -> None:
+        if self._turn_in_flight and not self._cancel_sent:
+            self._cancel_sent = True
+            self._turn_in_flight = False
+            # If a caller times out or breaks out early before EVENT_COMPLETE,
+            # cancel the in-flight provider turn BEFORE releasing the semaphore
+            # so the next _bg caller never races an unfinished turn.
+            cancel_fn = getattr(self._sess.provider, "cancel", None)
+            if callable(cancel_fn):
+                with contextlib.suppress(Exception, asyncio.CancelledError):
+                    await asyncio.wait_for(asyncio.shield(cancel_fn()), timeout=5.0)
+        self._release()
+
     async def prompt(
         self,
         message: str,
@@ -324,20 +339,25 @@ class _ProviderBgSession:
         # underlying provider/client manages its own stale-turn watchdog.
         await self._sess.semaphore.acquire()
         self._sem_held = True
+        self._turn_in_flight = True
+        self._cancel_sent = False
         try:
             async for event in self._sess.provider.stream(message, allow_image=allow_image):
+                if getattr(event, "kind", None) == "complete":
+                    self._turn_in_flight = False
                 yield event
+            self._turn_in_flight = False
         finally:
-            self._release()
+            await self._cancel_unfinished_and_release()
 
     async def reject_tool(self, request_id: str | int) -> None:
         await self._sess.provider.reject_tool(request_id)
 
     async def destroy(self) -> None:
         # The background _Session is persistent and shared — never tear it down
-        # here. Just release the turn semaphore deterministically so the next
-        # caller isn't blocked on generator finalization.
-        self._release()
+        # here. Cancel any unfinished turn before releasing the turn semaphore
+        # deterministically so the next caller isn't blocked or raced.
+        await self._cancel_unfinished_and_release()
 
 
 class BackgroundSessionRuntime:

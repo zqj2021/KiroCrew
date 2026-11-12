@@ -1273,6 +1273,7 @@ from kiro_crew.agent_sdk.backends_members import (  # noqa: E402,F401 - re-expor
     crewmate_inherited_backend,
 )
 from kiro_crew.agent_sdk.backends_models import (  # noqa: E402,F401 - re-exported vocabulary
+    _DEFAULT_BACKGROUND_MODEL_BY_NAMESPACE,
     _MODEL_REFUSAL_PHRASE_BY_BACKEND,
     _MODEL_REGISTRY_NAMESPACE_BY_BACKEND,
     ACP_BACKENDS_ADVERTISED_MODEL_SELECTION,
@@ -1296,6 +1297,7 @@ from kiro_crew.agent_sdk.backends_models import (  # noqa: E402,F401 - re-export
     EFFORT_CONFIG_OPTION_VALUES,
     EFFORT_LEVELS_AT_LAUNCH_BY_BACKEND,
     ULTRACODE_CONFIG_OPTION_ID,
+    default_background_model_for_namespace,
     effort_config_option_clear_value,
     effort_config_option_id,
     effort_config_option_levels,
